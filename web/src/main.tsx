@@ -164,7 +164,7 @@ function DashboardPage({ dashboard, action, restart }: { dashboard: Dashboard | 
       <div className="stat-grid">
         <StatCard icon={<Activity size={18} />} label="NapCat" value={online ? "在线" : "未连接"} detail={dashboard?.napcat?.loginPhase || "等待状态"} tone="green" />
         <StatCard icon={<MessageSquareText size={18} />} label="关键词命中" value={String(dashboard?.stats?.keyword_hits_today ?? 0)} detail="今日累计" tone="blue" />
-        <StatCard icon={<Send size={18} />} label="群发任务" value="0" detail="等待执行" tone="violet" />
+        <BroadcastCountCard />
         <StatCard icon={<Users size={18} />} label="配置群聊" value={String(dashboard?.stats?.groups ?? 0)} detail="已同步群聊" tone="slate" />
       </div>
       <div className="dashboard-grid">
@@ -190,6 +190,12 @@ function DashboardPage({ dashboard, action, restart }: { dashboard: Dashboard | 
       </section>
     </section>
   );
+}
+
+function BroadcastCountCard() {
+  const [count, setCount] = useState("0");
+  useEffect(() => { void apiJson<BroadcastTask[]>("/api/broadcast-tasks?limit=200").then((tasks) => setCount(String(tasks.filter((task) => ["queued", "running"].includes(task.status)).length))).catch(() => undefined); }, []);
+  return <StatCard icon={<Send size={18} />} label="群发任务" value={count} detail="排队或执行中" tone="violet" />;
 }
 
 function StatCard({ icon, label, value, detail, tone }: { icon: ReactNode; label: string; value: string; detail: string; tone: string }) {
@@ -294,13 +300,17 @@ function KeywordPage({ onError }: { onError: (message: string) => void }) {
 function HistoryPage({ onError }: { onError: (message: string) => void }) {
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [total, setTotal] = useState(0);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [selectedGroup, setSelectedGroup] = useState<string[]>([]);
   const load = async () => {
-    try { const data = await apiJson<{ items: HistoryItem[]; total: number }>("/api/history?limit=100"); setItems(data.items); setTotal(data.total); }
+    try { const query = selectedGroup[0] ? `&group_id=${encodeURIComponent(selectedGroup[0])}` : ""; const data = await apiJson<{ items: HistoryItem[]; total: number }>(`/api/history?limit=100${query}`); setItems(data.items); setTotal(data.total); }
     catch (reason) { onError(reason instanceof Error ? reason.message : "历史记录加载失败"); }
   };
-  useEffect(() => { void load(); }, []);
+  useEffect(() => { void apiJson<Group[]>("/api/groups").then(setGroups).catch((reason) => onError(reason instanceof Error ? reason.message : "群聊加载失败")); }, []);
+  useEffect(() => { void load(); }, [selectedGroup]);
   return <section className="content">
     <div className="welcome-row"><div><h2>历史记录</h2><p>关键词命中会保留群、发送者和原始文本。</p></div><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button></div>
+    <section className="panel form-panel history-filter"><div className="panel-heading"><div><div className="panel-kicker">FILTER</div><h3>按群聊查看</h3></div><button className="button ghost" onClick={() => setSelectedGroup([])}>全部群聊</button></div><GroupPicker groups={groups} selected={selectedGroup} onChange={setSelectedGroup} single /></section>
     <section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">HISTORY</div><h3>关键词命中</h3></div><span className="muted">共 {total} 条</span></div>
       {items.length === 0 ? <div className="empty-state"><div className="empty-icon"><FileText size={22} /></div><strong>暂无命中记录</strong><span>机器人识别到关键词后会显示在这里。</span></div> : <div className="table-wrap"><table><thead><tr><th>时间</th><th>群聊</th><th>发送者</th><th>命中</th><th>消息</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td className="nowrap">{new Date(item.hit_at).toLocaleString("zh-CN", { hour12: false })}</td><td><strong>{item.group_name || "未命名群"}</strong><small>{item.group_id}</small></td><td>{item.sender_name || "未知"}<small>{item.sender_id}</small></td><td><span className="keyword-tag">{item.keyword_text_snapshot}</span></td><td className="message-cell">{item.message_text || "（非文本消息）"}</td></tr>)}</tbody></table></div>}
     </section>
