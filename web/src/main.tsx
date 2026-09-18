@@ -18,6 +18,8 @@ type Dashboard = {
 type Group = { group_id: string; name: string; avatar_url: string; enabled: number };
 type Keyword = { id: number; display_text: string; group_count: number; bindings: { group_id: string; enabled: number; cooldown_seconds: number }[] };
 type HistoryItem = { id: number; group_id: string; group_name: string; sender_id: string; sender_name: string; keyword_text_snapshot: string; message_text: string; hit_at: string; notify_status: string };
+type Destination = { id: number; kind: "qq" | "email"; address: string; display_name: string; enabled: number };
+type BroadcastTask = { id: string; title: string; status: string; total_count: number; sent_count: number; failed_count: number; interval_seconds: number; created_at: string };
 
 const navItems = [
   ["Dashboard", LayoutDashboard],
@@ -125,7 +127,9 @@ function App() {
         {active === "历史记录" && <HistoryPage onError={setError} />}
         {active === "登录与 NapCat" && <NapCatPage onError={setError} />}
         {active === "运行日志" && <LogsPage onError={setError} />}
-        {!(["Dashboard", "关键词", "历史记录", "登录与 NapCat", "运行日志"] as string[]).includes(active) && <PlaceholderPage active={active} />}
+        {active === "通知" && <NotificationsPage onError={setError} />}
+        {active === "群发任务" && <BroadcastPage onError={setError} />}
+        {!(["Dashboard", "关键词", "历史记录", "登录与 NapCat", "运行日志", "通知", "群发任务"] as string[]).includes(active) && <PlaceholderPage active={active} />}
       </main>
     </div>
   );
@@ -305,6 +309,30 @@ function LogsPage({ onError }: { onError: (message: string) => void }) {
   };
   useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 5000); return () => window.clearInterval(timer); }, [service]);
   return <section className="content"><div className="welcome-row"><div><h2>运行日志</h2><p>查看 NoneBot 和 NapCat 最近输出，日志来源由后端控制。</p></div><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button></div><section className="panel logs-panel"><div className="log-tabs"><button className={service === "nonebot" ? "log-tab active" : "log-tab"} onClick={() => setService("nonebot")}>NoneBot</button><button className={service === "napcat" ? "log-tab active" : "log-tab"} onClick={() => setService("napcat")}>NapCat</button></div><pre className="log-output">{logs}</pre></section></section>;
+}
+
+function NotificationsPage({ onError }: { onError: (message: string) => void }) {
+  const [items, setItems] = useState<Destination[]>([]);
+  const [kind, setKind] = useState<"qq" | "email">("qq");
+  const [address, setAddress] = useState("");
+  const [name, setName] = useState("");
+  const load = async () => { try { setItems(await apiJson<Destination[]>("/api/destinations")); } catch (reason) { onError(reason instanceof Error ? reason.message : "通知配置读取失败"); } };
+  useEffect(() => { void load(); }, []);
+  const add = async (event: React.FormEvent) => { event.preventDefault(); try { await apiJson("/api/destinations", { method: "POST", body: JSON.stringify({ kind, address, display_name: name }) }); setAddress(""); setName(""); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "通知收件人保存失败"); } };
+  const remove = async (id: number) => { try { await apiJson(`/api/destinations/${id}`, { method: "DELETE" }); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "删除失败"); } };
+  return <section className="content"><div className="welcome-row"><div><h2>通知设置</h2><p>先维护 QQ 好友或邮箱收件人，再在群级设置中启用。</p></div><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button></div><section className="panel form-panel"><div className="panel-heading"><div><div className="panel-kicker">DESTINATION</div><h3>添加收件人</h3></div></div><form className="destination-form" onSubmit={(event) => void add(event)}><label className="field"><span>类型</span><select value={kind} onChange={(event) => setKind(event.target.value as "qq" | "email")}><option value="qq">QQ 好友</option><option value="email">邮箱</option></select></label><label className="field"><span>{kind === "qq" ? "QQ 号" : "邮箱地址"}</span><input value={address} onChange={(event) => setAddress(event.target.value)} placeholder={kind === "qq" ? "123456789" : "name@example.com"} /></label><label className="field"><span>备注</span><input value={name} onChange={(event) => setName(event.target.value)} placeholder="例如：管理员" /></label><button className="button primary"><Bell size={15} />添加</button></form></section><section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">RECIPIENTS</div><h3>收件人列表</h3></div><span className="muted">{items.length} 个</span></div>{items.length === 0 ? <div className="empty-state"><div className="empty-icon"><Bell size={22} /></div><strong>还没有收件人</strong><span>添加 QQ 或邮箱后，命中通知才能投递。</span></div> : <div className="table-wrap"><table><thead><tr><th>类型</th><th>地址</th><th>备注</th><th /></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td>{item.kind === "qq" ? "QQ 好友" : "邮箱"}</td><td><strong>{item.address}</strong></td><td>{item.display_name || <span className="muted">-</span>}</td><td><button className="icon-button danger-button" onClick={() => void remove(item.id)} aria-label="删除收件人"><X size={16} /></button></td></tr>)}</tbody></table></div>}</section></section>;
+}
+
+function BroadcastPage({ onError }: { onError: (message: string) => void }) {
+  const [tasks, setTasks] = useState<BroadcastTask[]>([]);
+  const [title, setTitle] = useState("");
+  const [groups, setGroups] = useState("");
+  const [message, setMessage] = useState("");
+  const [interval, setInterval] = useState(12);
+  const load = async () => { try { setTasks(await apiJson<BroadcastTask[]>("/api/broadcast-tasks")); } catch (reason) { onError(reason instanceof Error ? reason.message : "群发任务读取失败"); } };
+  useEffect(() => { void load(); }, []);
+  const create = async (event: React.FormEvent) => { event.preventDefault(); try { await apiJson("/api/broadcast-tasks", { method: "POST", body: JSON.stringify({ title, group_ids: groups.split(/[,，\s]+/).filter(Boolean), message: [{ type: "text", data: { text: message } }], interval_seconds: interval }) }); setTitle(""); setGroups(""); setMessage(""); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "群发任务创建失败"); } };
+  return <section className="content"><div className="welcome-row"><div><h2>群发任务</h2><p>每分钟最多 5 个群，最小群间延时为 12 秒。图片编辑器将在下一轮接入。</p></div><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button></div><section className="panel form-panel"><div className="panel-heading"><div><div className="panel-kicker">NEW TASK</div><h3>创建群发任务</h3></div></div><form className="broadcast-form" onSubmit={(event) => void create(event)}><label className="field"><span>任务名称</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：活动通知" required /></label><label className="field"><span>目标群号</span><input value={groups} onChange={(event) => setGroups(event.target.value)} placeholder="多个群号用空格或逗号分隔" required /></label><label className="field field-wide"><span>消息内容</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="支持换行" rows={4} required /></label><label className="field"><span>群间延时（秒）</span><input type="number" min={12} max={60} value={interval} onChange={(event) => setInterval(Number(event.target.value))} /></label><button className="button primary"><Send size={15} />创建任务</button></form></section><section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">TASKS</div><h3>任务进度</h3></div><span className="muted">{tasks.length} 个任务</span></div>{tasks.length === 0 ? <div className="empty-state"><div className="empty-icon"><Send size={22} /></div><strong>暂无群发任务</strong><span>创建任务后，进度会显示在这里。</span></div> : <div className="table-wrap"><table><thead><tr><th>任务</th><th>状态</th><th>进度</th><th>创建时间</th></tr></thead><tbody>{tasks.map((task) => <tr key={task.id}><td><strong>{task.title}</strong><small>{task.id.slice(0, 8)}</small></td><td>{task.status}</td><td>{task.sent_count}/{task.total_count}{task.failed_count ? ` · 失败 ${task.failed_count}` : ""}</td><td className="nowrap">{new Date(task.created_at).toLocaleString("zh-CN", { hour12: false })}</td></tr>)}</tbody></table></div>}</section></section>;
 }
 
 function PlaceholderPage({ active }: { active: string }) {

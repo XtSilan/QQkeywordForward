@@ -69,6 +69,62 @@ CREATE TABLE IF NOT EXISTS keyword_hits (
 
 CREATE INDEX IF NOT EXISTS idx_keyword_hits_group_time
   ON keyword_hits(group_id, hit_at DESC);
+
+CREATE TABLE IF NOT EXISTS notification_destinations (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  kind TEXT NOT NULL CHECK(kind IN ('qq', 'email')),
+  address TEXT NOT NULL,
+  display_name TEXT NOT NULL DEFAULT '',
+  enabled INTEGER NOT NULL DEFAULT 1,
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(kind, address)
+);
+
+CREATE TABLE IF NOT EXISTS group_notification_settings (
+  group_id TEXT PRIMARY KEY REFERENCES groups(group_id),
+  qq_enabled INTEGER NOT NULL DEFAULT 0,
+  email_enabled INTEGER NOT NULL DEFAULT 0,
+  updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE TABLE IF NOT EXISTS notification_destination_bindings (
+  group_id TEXT NOT NULL REFERENCES groups(group_id),
+  destination_id INTEGER NOT NULL REFERENCES notification_destinations(id),
+  PRIMARY KEY(group_id, destination_id)
+);
+
+CREATE TABLE IF NOT EXISTS broadcast_tasks (
+  id TEXT PRIMARY KEY,
+  title TEXT NOT NULL,
+  message_json TEXT NOT NULL,
+  interval_seconds INTEGER NOT NULL CHECK(interval_seconds >= 12),
+  group_cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+  status TEXT NOT NULL DEFAULT 'draft',
+  total_count INTEGER NOT NULL DEFAULT 0,
+  sent_count INTEGER NOT NULL DEFAULT 0,
+  failed_count INTEGER NOT NULL DEFAULT 0,
+  created_by TEXT NOT NULL DEFAULT 'webui',
+  created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  started_at TEXT,
+  finished_at TEXT,
+  cancelled_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS broadcast_task_groups (
+  task_id TEXT NOT NULL REFERENCES broadcast_tasks(id),
+  group_id TEXT NOT NULL REFERENCES groups(group_id),
+  status TEXT NOT NULL DEFAULT 'queued',
+  scheduled_at TEXT NOT NULL,
+  sent_at TEXT,
+  message_id TEXT,
+  error_code TEXT,
+  error_text TEXT,
+  attempts INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(task_id, group_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_broadcast_task_groups_due
+  ON broadcast_task_groups(status, scheduled_at);
 """
 
 

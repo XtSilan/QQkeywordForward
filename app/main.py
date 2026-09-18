@@ -1,4 +1,7 @@
 import re
+import json
+import uuid
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -68,6 +71,26 @@ class KeywordBulkApply(BaseModel):
     group_ids: list[str] = Field(min_length=1)
     enabled: bool = False
     cooldown_seconds: int = Field(default=60, ge=0, le=86400)
+
+
+class DestinationCreate(BaseModel):
+    kind: str = Field(pattern="^(qq|email)$")
+    address: str = Field(min_length=3, max_length=320)
+    display_name: str = Field(default="", max_length=100)
+
+
+class NotificationSettingsPayload(BaseModel):
+    qq_enabled: bool = False
+    email_enabled: bool = False
+    destination_ids: list[int] = Field(default_factory=list)
+
+
+class BroadcastTaskCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=120)
+    group_ids: list[str] = Field(min_length=1)
+    message: list[dict[str, Any]] = Field(min_length=1)
+    interval_seconds: int = Field(default=12, ge=12, le=60)
+    group_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
 
 
 def row_dict(row: Any) -> dict[str, Any]:
@@ -290,6 +313,152 @@ def history(
             (group_id, group_id, keyword_id, keyword_id),
         ).fetchone()["count"]
     return {"items": [row_dict(row) for row in rows], "total": int(total), "limit": limit, "offset": offset}
+
+
+@app.get("/api/destinations", dependencies=[Depends(admin_guard)])
+def destinations() -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT id, kind, address, display_name, enabled, created_at "
+            "FROM notification_destinations ORDER BY kind, id DESC"
+        ).fetchall()
+    return [row_dict(row) for row in rows]
+
+
+@app.post("/api/destinations", dependencies=[Depends(admin_guard)])
+def create_destination(payload: DestinationCreate) -> dict[str, Any]:
+    address = payload.address.strip()
+    if payload.kind == "email" and ("@" not in address or " " in address):
+        raise HTTPException(status_code=422, detail="invalid email address")
+    with connection() as conn:
+        try:
+            cursor = conn.execute(
+                "INSERT INTO notification_destinations(kind, address, display_name) VALUES (?, ?, ?)",
+                (payload.kind, address, payload.display_name.strip()),
+            )
+        except Exception as exc:
+            if "UNIQUE constraint failed" in str(exc):
+                raise HTTPException(status_code=409, detail="destination already exists") from exc
+            raise
+    return {"id": int(cursor.lastrowid), "revision": bump_config_revision()}
+
+
+@app.delete("/api/destinations/{destination_id}", dependencies=[Depends(admin_guard)])
+def delete_destination(destination_id: int) -> dict[str, Any]:
+    with connection() as conn:
+        cursor = conn.execute("DELETE FROM notification_destinations WHERE id=?", (destination_id,))
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="destination not found")
+    return {"deleted": True, "revision": bump_config_revision()}
+
+
+@app.get("/api/groups/{group_id}/notification-settings", dependencies=[Depends(admin_guard)])
+def get_notification_settings(group_id: str) -> dict[str, Any]:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT qq_enabled, email_enabled FROM group_notification_settings WHERE group_id=?",
+            (group_id,),
+        ).fetchone()
+        bindings = conn.execute(
+            "SELECT destination_id FROM notification_destination_bindings WHERE group_id=?",
+            (group_id,),
+        ).fetchall()
+    return {
+        "group_id": group_id,
+        "qq_enabled": bool(row["qq_enabled"]) if row else False,
+        "email_enabled": bool(row["email_enabled"]) if row else False,
+        "destination_ids": [int(item["destination_id"]) for item in bindings],
+    }
+
+
+@app.put("/api/groups/{group_id}/notification-settings", dependencies=[Depends(admin_guard)])
+def put_notification_settings(group_id: str, payload: NotificationSettingsPayload) -> dict[str, Any]:
+    destination_ids = list(dict.fromkeys(payload.destination_ids))
+    with connection() as conn:
+        conn.execute("INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,))
+        conn.execute(
+            "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
+            "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET "
+            "qq_enabled=excluded.qq_enabled, email_enabled=excluded.email_enabled, updated_at=CURRENT_TIMESTAMP",
+            (group_id, int(payload.qq_enabled), int(payload.email_enabled)),
+        )
+        conn.execute("DELETE FROM notification_destination_bindings WHERE group_id=?", (group_id,))
+        for destination_id in destination_ids:
+            conn.execute(
+                "INSERT INTO notification_destination_bindings(group_id, destination_id) VALUES (?, ?)",
+                (group_id, destination_id),
+            )
+    return {"saved": True, "revision": bump_config_revision()}
+
+
+@app.get("/api/broadcast-tasks", dependencies=[Depends(admin_guard)])
+def broadcast_tasks(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT id, title, interval_seconds, group_cooldown_seconds, status, total_count, "
+            "sent_count, failed_count, created_at, started_at, finished_at "
+            "FROM broadcast_tasks ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [row_dict(row) for row in rows]
+
+
+@app.post("/api/broadcast-tasks", dependencies=[Depends(admin_guard)])
+def create_broadcast_task(payload: BroadcastTaskCreate) -> dict[str, Any]:
+    group_ids = list(dict.fromkeys(group_id.strip() for group_id in payload.group_ids if group_id.strip()))
+    if not group_ids:
+        raise HTTPException(status_code=422, detail="at least one group is required")
+    task_id = uuid.uuid4().hex
+    now = datetime.now(timezone.utc)
+    with connection() as conn:
+        for group_id in group_ids:
+            conn.execute("INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,))
+        conn.execute(
+            "INSERT INTO broadcast_tasks(id, title, message_json, interval_seconds, group_cooldown_seconds, "
+            "status, total_count, created_at) VALUES (?, ?, ?, ?, ?, 'queued', ?, ?)",
+            (task_id, payload.title.strip(), json.dumps(payload.message, ensure_ascii=False), payload.interval_seconds,
+             payload.group_cooldown_seconds, len(group_ids), now.isoformat()),
+        )
+        for index, group_id in enumerate(group_ids):
+            conn.execute(
+                "INSERT INTO broadcast_task_groups(task_id, group_id, scheduled_at) VALUES (?, ?, ?)",
+                (task_id, group_id, (now + timedelta(seconds=index * payload.interval_seconds)).isoformat()),
+            )
+    return {"id": task_id, "status": "queued", "total_count": len(group_ids), "revision": bump_config_revision()}
+
+
+@app.get("/api/broadcast-tasks/{task_id}", dependencies=[Depends(admin_guard)])
+def broadcast_task(task_id: str) -> dict[str, Any]:
+    with connection() as conn:
+        task = conn.execute("SELECT * FROM broadcast_tasks WHERE id=?", (task_id,)).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="task not found")
+        groups = conn.execute(
+            "SELECT task_id, group_id, status, scheduled_at, sent_at, message_id, error_code, error_text, attempts "
+            "FROM broadcast_task_groups WHERE task_id=? ORDER BY scheduled_at",
+            (task_id,),
+        ).fetchall()
+    result = row_dict(task)
+    result["message"] = json.loads(result.pop("message_json"))
+    result["groups"] = [row_dict(group) for group in groups]
+    return result
+
+
+@app.post("/api/broadcast-tasks/{task_id}/cancel", dependencies=[Depends(admin_guard)])
+def cancel_broadcast_task(task_id: str) -> dict[str, Any]:
+    with connection() as conn:
+        cursor = conn.execute(
+            "UPDATE broadcast_tasks SET status='cancelled', cancelled_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND status IN ('draft', 'queued', 'running')",
+            (task_id,),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="active task not found")
+        conn.execute(
+            "UPDATE broadcast_task_groups SET status='cancelled' WHERE task_id=? AND status='queued'",
+            (task_id,),
+        )
+    return {"cancelled": True, "revision": bump_config_revision()}
 
 
 @app.get("/api/ops/napcat/login", dependencies=[Depends(admin_guard)])
