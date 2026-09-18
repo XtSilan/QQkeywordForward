@@ -137,6 +137,8 @@ Docker socket 是高权限能力，只在需要 Docker 日志或服务重启时�
 
 日志页面采用两个来源标签：NoneBot 和 NapCat。
 
+WebUI 的群发任务和通知配置已经接入 SQLite 队列；NoneBot worker 启动时会运行受控调度循环，按任务间隔和全局每分钟 5 群限制调用 OneBot V11 发送接口。调度器重启后会从 `queued` 状态继续领取未发送群，不依赖容器可写层。
+
 ## 数据库选型
 
 继续使用 SQLite，不引入 MySQL。

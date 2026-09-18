@@ -125,6 +125,21 @@ CREATE TABLE IF NOT EXISTS broadcast_task_groups (
 
 CREATE INDEX IF NOT EXISTS idx_broadcast_task_groups_due
   ON broadcast_task_groups(status, scheduled_at);
+
+CREATE TABLE IF NOT EXISTS notification_jobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  hit_id INTEGER NOT NULL REFERENCES keyword_hits(id),
+  destination_id INTEGER NOT NULL REFERENCES notification_destinations(id),
+  status TEXT NOT NULL DEFAULT 'pending',
+  attempts INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_error TEXT,
+  sent_at TEXT,
+  UNIQUE(hit_id, destination_id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_notification_jobs_due
+  ON notification_jobs(status, next_attempt_at);
 """
 
 

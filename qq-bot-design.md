@@ -318,6 +318,8 @@ API 只接受登录 WebUI 会话或管理员 Bearer token：
 1. 取一个已到期的 broadcast_task_groups 或 notification_jobs。
 2. 用 SQLite BEGIN IMMEDIATE 抢占记录并写入短租约，租约超时可恢复。
 3. 检查任务取消状态、群冷却和全局 5/分钟令牌桶。
+
+当前实现已经在 NoneBot worker 内启动单实例调度循环：关键词命中会根据群级通知设置写入 `notification_jobs`，群发任务由 WebUI 写入 `broadcast_task_groups`；worker 通过 OneBot V11 Bot API 发送 QQ 私聊和群消息，并更新发送、失败和完成状态。邮箱任务会保留为失败状态并记录“email sender not configured”，待 SMTP 适配器接入后重试。
 4. 调用 NoneBot Bot 的 OneBot V11 API：好友通知使用 send_private_msg，群发使用 send_group_msg。
 5. 成功写入 OneBot 返回的 message_id；失败按指数退避，最多 3 次。
 6. 更新 Dashboard 计数，前端通过 WebSocket 或短轮询刷新进度。
