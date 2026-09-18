@@ -17,6 +17,7 @@ from app.settings import get_settings
 _scheduler_task: asyncio.Task | None = None
 _stop_scheduler = asyncio.Event()
 _send_times: deque[float] = deque()
+_group_sync_at: float = 0
 
 
 def _smtp_send(settings, recipient: str, subject: str, body: str) -> None:
@@ -181,6 +182,28 @@ def _bot() -> Bot | None:
     return next(iter(bots.values()), None)
 
 
+async def _sync_groups(bot: Bot) -> None:
+    try:
+        groups = await bot.call_api("get_group_list")
+    except Exception as exc:
+        nonebot.logger.warning("group sync failed: %s", exc)
+        return
+    if not isinstance(groups, list):
+        return
+    with connection() as conn:
+        for group in groups:
+            group_id = str(group.get("group_id", "")).strip()
+            if not group_id:
+                continue
+            name = str(group.get("group_name", ""))
+            avatar = f"https://p.qlogo.cn/gh/{group_id}/{group_id}/100/"
+            conn.execute(
+                "INSERT INTO groups(group_id, name, avatar_url, last_synced_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(group_id) DO UPDATE SET name=excluded.name, avatar_url=excluded.avatar_url, last_synced_at=CURRENT_TIMESTAMP",
+                (group_id, name, avatar),
+            )
+
+
 async def _dispatch_notifications(bot: Bot) -> None:
     with connection() as conn:
         job = conn.execute(
@@ -246,9 +269,14 @@ async def _dispatch_broadcasts(bot: Bot) -> None:
 
 
 async def dispatch_loop() -> None:
+    global _group_sync_at
     while not _stop_scheduler.is_set():
         bot = _bot()
         if bot:
+            now = asyncio.get_running_loop().time()
+            if now - _group_sync_at >= 300:
+                await _sync_groups(bot)
+                _group_sync_at = now
             await _dispatch_notifications(bot)
             await _dispatch_broadcasts(bot)
         try:

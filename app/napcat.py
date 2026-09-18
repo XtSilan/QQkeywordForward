@@ -1,4 +1,5 @@
 import hashlib
+import json
 from typing import Any
 
 import httpx
@@ -91,4 +92,13 @@ class NapCatClient:
             raise ValueError("invalid log filename")
         return await self.request(
             "GET", "/api/Log/GetLog", params={"id": filename}
+        )
+
+    async def onebot_config(self) -> Any:
+        return await self.request("POST", "/api/OB11Config/GetConfig")
+
+    async def set_onebot_config(self, config: dict[str, Any]) -> Any:
+        return await self.request(
+            "POST", "/api/OB11Config/SetConfig",
+            json={"config": json.dumps(config, ensure_ascii=False)},
         )

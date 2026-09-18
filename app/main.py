@@ -179,6 +179,15 @@ class SmtpSettingsPayload(BaseModel):
     timeout: int = Field(default=15, ge=1, le=120)
 
 
+class OneBotWebsocketPayload(BaseModel):
+    enable: bool = False
+    url: str = Field(min_length=1, max_length=1000)
+    reconnectInterval: int = Field(default=5000, ge=100, le=3600000)
+    heartInterval: int = Field(default=30000, ge=1000, le=3600000)
+    verifyCertificate: bool = True
+    token: str | None = Field(default=None, max_length=500)
+
+
 def row_dict(row: Any) -> dict[str, Any]:
     return dict(row)
 
@@ -216,6 +225,42 @@ def put_smtp_settings(payload: SmtpSettingsPayload) -> dict[str, Any]:
                 (key, value),
             )
     return {"saved": True, "password_configured": bool(payload.password), "revision": bump_config_revision()}
+
+
+@app.get("/api/settings/onebot", dependencies=[Depends(admin_guard)])
+async def get_onebot_settings(client: NapCatClient = Depends(napcat)) -> dict[str, Any]:
+    try:
+        config = await client.onebot_config()
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"NapCat OneBot 配置不可用: {exc}") from exc
+    clients = (config.get("network", {}) if isinstance(config, dict) else {}).get("websocketClients", [])
+    item = next((value for value in clients if value.get("name") == "websocket-client"), clients[0] if clients else {})
+    return {"websocket_client": {
+        "name": item.get("name", "websocket-client"), "enable": bool(item.get("enable", False)),
+        "url": item.get("url", ""), "reconnectInterval": item.get("reconnectInterval", 5000),
+        "heartInterval": item.get("heartInterval", 30000), "verifyCertificate": item.get("verifyCertificate", True),
+        "token_configured": bool(item.get("token")),
+    }}
+
+
+@app.put("/api/settings/onebot", dependencies=[Depends(admin_guard)])
+async def put_onebot_settings(payload: OneBotWebsocketPayload, client: NapCatClient = Depends(napcat)) -> dict[str, Any]:
+    try:
+        config = await client.onebot_config()
+        network = config.setdefault("network", {})
+        clients = network.setdefault("websocketClients", [])
+        item = next((value for value in clients if value.get("name") == "websocket-client"), None)
+        if item is None:
+            item = {"name": "websocket-client", "messagePostFormat": "array", "reportSelfMessage": False, "debug": False}
+            clients.append(item)
+        item.update({"enable": payload.enable, "url": payload.url, "reconnectInterval": payload.reconnectInterval,
+                    "heartInterval": payload.heartInterval, "verifyCertificate": payload.verifyCertificate})
+        if payload.token is not None:
+            item["token"] = payload.token
+        await client.set_onebot_config(config)
+    except Exception as exc:
+        raise HTTPException(status_code=503, detail=f"OneBot 配置写入失败: {exc}") from exc
+    return {"saved": True, "restart_required": True, "revision": bump_config_revision()}
 
 
 @app.post("/api/notifications/test", dependencies=[Depends(admin_guard)])
