@@ -33,13 +33,13 @@ const navItems = [
 ] as const;
 
 async function getDashboard(): Promise<Dashboard> {
-  const response = await fetch("/api/dashboard");
+  const response = await fetch("/api/dashboard", { credentials: "include" });
   if (!response.ok) throw new Error("无法读取服务状态");
   return response.json();
 }
 
 async function apiJson<T>(path: string, options?: RequestInit): Promise<T> {
-  const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  const response = await fetch(path, { credentials: "include", headers: { "Content-Type": "application/json" }, ...options });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.detail || "请求失败");
   return body as T;
@@ -53,6 +53,7 @@ function App() {
   const [active, setActive] = useState("Dashboard");
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [error, setError] = useState("");
   const [action, setAction] = useState("");
 
@@ -66,15 +67,18 @@ function App() {
   };
 
   useEffect(() => {
+    void fetch("/api/auth/me", { credentials: "include" }).then((response) => setAuthenticated(response.ok)).catch(() => setAuthenticated(false));
     void refresh();
     const timer = window.setInterval(() => void refresh(), 5000);
     return () => window.clearInterval(timer);
   }, []);
 
+  if (authenticated === false) return <LoginPage onLogin={() => setAuthenticated(true)} />;
+
   const restart = async (service: "napcat" | "nonebot") => {
     setAction(service);
     try {
-      const response = await fetch("/api/ops/services/" + service + "/restart", { method: "POST" });
+      const response = await fetch("/api/ops/services/" + service + "/restart", { method: "POST", credentials: "include" });
       if (!response.ok) {
         const body = await response.json();
         throw new Error(body.detail || "重启失败");
@@ -133,6 +137,18 @@ function App() {
       </main>
     </div>
   );
+}
+
+function LoginPage({ onLogin }: { onLogin: () => void }) {
+  const [token, setToken] = useState("");
+  const [error, setError] = useState("");
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault();
+    const response = await fetch("/api/auth/login", { method: "POST", credentials: "include", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ token }) });
+    if (!response.ok) { setError("管理员 token 不正确"); return; }
+    setToken(""); onLogin();
+  };
+  return <main className="main login-main"><section className="panel login-panel"><div className="brand-mark"><Bot size={22} /></div><h1>管理员登录</h1><p>请输入部署时配置的管理员 token。</p><form onSubmit={(event) => void submit(event)}><label className="field"><span>管理员 token</span><input type="password" value={token} onChange={(event) => setToken(event.target.value)} autoFocus required /></label><button className="button primary"><ShieldCheck size={15} />登录</button>{error && <div className="alert error">{error}</div>}</form></section></main>;
 }
 
 function DashboardPage({ dashboard, action, restart }: { dashboard: Dashboard | null; action: string; restart: (service: "napcat" | "nonebot") => Promise<void> }) {

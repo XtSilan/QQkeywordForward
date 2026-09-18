@@ -1,14 +1,17 @@
 import re
 import json
 import uuid
+import hmac
+import hashlib
+import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-from fastapi.responses import FileResponse, PlainTextResponse
+from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.control import DockerControl
@@ -52,14 +55,67 @@ def startup() -> None:
 
 
 def admin_guard(
+    request: Request,
     authorization: str | None = Header(default=None),
     settings: Settings = Depends(get_settings),
 ) -> None:
     if settings.app_env == "dev":
         return
-    expected = f"Bearer {settings.admin_token}"
-    if authorization != expected:
+    if authorization and authorization.startswith("Bearer ") and hmac.compare_digest(authorization[7:], settings.admin_token):
+        return
+    session = request.cookies.get("qq_bot_session", "")
+    if _valid_session(session, settings):
+        return
+    raise HTTPException(status_code=401, detail="unauthorized")
+
+
+def _session_token(settings: Settings, timestamp: int | None = None) -> str:
+    timestamp = timestamp or int(time.time())
+    value = str(timestamp)
+    signature = hmac.new(settings.auth_session_secret.encode(), value.encode(), hashlib.sha256).hexdigest()
+    return f"{value}.{signature}"
+
+
+def _valid_session(token: str, settings: Settings) -> bool:
+    try:
+        timestamp_text, signature = token.split(".", 1)
+        timestamp = int(timestamp_text)
+    except (ValueError, TypeError):
+        return False
+    if abs(int(time.time()) - timestamp) > settings.auth_session_ttl:
+        return False
+    expected = hmac.new(settings.auth_session_secret.encode(), timestamp_text.encode(), hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+
+class AdminLoginPayload(BaseModel):
+    token: str = Field(min_length=1, max_length=500)
+
+
+@app.post("/api/auth/login")
+def auth_login(payload: AdminLoginPayload, response: Response, settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    if not hmac.compare_digest(payload.token, settings.admin_token):
         raise HTTPException(status_code=401, detail="unauthorized")
+    token = _session_token(settings)
+    response.set_cookie(
+        "qq_bot_session", token, max_age=settings.auth_session_ttl,
+        httponly=True, secure=settings.app_env == "prod", samesite="lax", path="/",
+    )
+    return {"authenticated": True}
+
+
+@app.post("/api/auth/logout")
+def auth_logout(response: Response) -> dict[str, Any]:
+    response.delete_cookie("qq_bot_session", path="/")
+    return {"authenticated": False}
+
+
+@app.get("/api/auth/me")
+def auth_me(request: Request, settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    authenticated = settings.app_env == "dev" or _valid_session(request.cookies.get("qq_bot_session", ""), settings)
+    if not authenticated:
+        raise HTTPException(status_code=401, detail="unauthorized")
+    return {"authenticated": True}
 
 
 def napcat(settings: Settings = Depends(get_settings)) -> NapCatClient:
