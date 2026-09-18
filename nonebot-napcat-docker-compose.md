@@ -1,5 +1,7 @@
 # NoneBot + NapCat Docker Compose 部署方案
 
+配套的机器人功能设计见 [qq-bot-design.md](qq-bot-design.md)，其中包含关键词、通知、历史记录、WebUI 和限速群发的数据库/API 设计。
+
 本文给出一个可重建、可备份、插件和 Python 包不依赖容器可写层的部署基线。当前目录没有现成项目文件，因此示例使用以下约定：
 
 ```text
