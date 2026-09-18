@@ -49,7 +49,7 @@
 | /api/Log/GetLog?id=... | GET | 读取指定日志 |
 | /api/Log/GetLogRealTime | GET | SSE 实时日志 |
 
-NapCat WebUI 使用 Authorization: Bearer <credential> 鉴权。credential 不是明文 token，而是 NapCat 登录接口签发的短期凭证。这个凭证只保存在服务端会话或 HttpOnly cookie 中，浏览器不直接调用 NapCat。
+NapCat WebUI 的业务 API 使用 `Authorization: Bearer <credential>` 鉴权。`webui.json` 里的 token 是 WebUI 登录口令，不能直接当作 Bearer 值；后端先调用 `/api/auth/login`，提交 `SHA256(token + ".napcat")`，再在内存中缓存返回的 Credential。token 和 Credential 只保存在服务端环境变量/内存中，浏览器不直接调用 NapCat。
 
 ### 后端代理
 
@@ -68,7 +68,7 @@ NapCat WebUI 使用 Authorization: Bearer <credential> 鉴权。credential 不�
 
 登录页面显示二维码 URL 或 data URL。二维码过期时前端提示并调用刷新接口。登录状态采用 2 秒轮询，成功后停止轮询并刷新群列表。
 
-密码登录默认关闭，只显示二维码和快速登录。只有管理员明确在系统设置开启密码登录时才展示表单，后端仅接收密码 MD5，日志和错误响应中不得回显凭据。
+密码登录默认关闭，只显示二维码和快速登录。只有管理员明确设置 `NAPCAT_PASSWORD_LOGIN_ENABLED=true` 时才展示表单，后端仅接收密码 MD5，日志和错误响应中不得回显凭据。
 
 ## NoneBot 配置热加载和重启
 
@@ -157,7 +157,7 @@ SQLite 文件位置固定为 ./data/nonebot/bot.sqlite3，开启 WAL、foreign_k
 服务分为：
 
 - napcat：现有 mlikiowa/napcat-docker，挂载账号和配置。
-- nonebot：NoneBot worker，连接 NapCat OneBot。
+- nonebot：NoneBot worker，监听 `8081` 的 OneBot V11 反向 WebSocket/HTTP，并连接 NapCat。
 - webui：React 静态文件、FastAPI API、调度器和 NapCat 代理。
 - 可选 control：只在需要 Docker 重启和 Docker 日志时启用的受限控制器。
 

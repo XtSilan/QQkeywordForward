@@ -1,0 +1,68 @@
+name: qq-bot
+
+services:
+  napcat:
+    image: mlikiowa/napcat-docker:v4.18.28
+    container_name: qq-bot-napcat
+    restart: unless-stopped
+    environment:
+      NAPCAT_UID: "1000"
+      NAPCAT_GID: "1000"
+    volumes:
+      - ./data/napcat:/app/napcat/config
+    ports:
+      - "6099:6099"
+      - "3001:3001"
+    networks:
+      - botnet
+
+  nonebot:
+    build: .
+    container_name: qq-bot-nonebot
+    restart: unless-stopped
+    command: python -m app.nonebot_bot
+    env_file:
+      - ./.env.prod
+    environment:
+      DATABASE_PATH: /app/data/nonebot/bot.sqlite3
+      LOG_DIR: /app/data/logs/nonebot
+      PYTHONPATH: /app
+    volumes:
+      - ./data/nonebot:/app/data/nonebot
+      - ./data/logs/nonebot:/app/data/logs/nonebot
+      - ./.env.prod:/app/.env.prod:ro
+    ports:
+      - "8081:8081"
+    depends_on:
+      - napcat
+    networks:
+      - botnet
+
+  webui:
+    build: .
+    container_name: qq-bot-webui
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8080
+    env_file:
+      - ./.env.prod
+    environment:
+      DATABASE_PATH: /app/data/nonebot/bot.sqlite3
+      LOG_DIR: /app/data/logs/nonebot
+      PYTHONPATH: /app
+    volumes:
+      - ./data/nonebot:/app/data/nonebot
+      - ./data/logs/nonebot:/app/data/logs/nonebot
+      - ./.env.prod:/app/.env.prod:ro
+      # Enable only when CONTROL_ENABLED=true.
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      - "8080:8080"
+    depends_on:
+      - napcat
+      - nonebot
+    networks:
+      - botnet
+
+networks:
+  botnet:
+    driver: bridge

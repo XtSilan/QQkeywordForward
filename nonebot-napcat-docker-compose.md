@@ -100,6 +100,8 @@ services:
     ports:
       # 仅在需要从宿主机访问 WebUI/调试端口时开放；OneBot 内网通信无需发布端口。
       - "6099:6099"
+      # NoneBot 的 OneBot 反向连接入口，便于宿主机调试；NapCat 同网时使用服务名访问。
+      - "3001:3001"
     networks:
       - botnet
 
@@ -192,6 +194,8 @@ docker compose exec nonebot sh -lc 'python -c "import nonebot; print(nonebot.__v
 
 NoneBot 会读取 `.env` 和 `.env.{ENVIRONMENT}`；本示例设置 `ENVIRONMENT=prod`，因此使用 `.env.prod`。Compose 的 `env_file` 是把变量注入进程环境，`./.env.prod:/nb2/.env.prod:ro` 则是把文件提供给 NoneBot 的 dotenv 加载器，两者用途不同，可以同时保留。
 
+本项目的 `.env.prod` 还包含 `NAPCAT_WEBUI_TOKEN`。它对应 NapCat `data/napcat/webui.json` 的 WebUI token，仅供 WebUI 后端换取短期 Credential；不要把它写进前端或提交 Git。NoneBot 的反向 WebSocket 入口是 `ws://nonebot:8081/onebot/v11/ws`，NapCat 登录后应在 OneBot 配置中指向该地址；鉴权变量使用 NoneBot OneBot V11 适配器识别的 `ONEBOT_V11_ACCESS_TOKEN`（以及可选的 `ONEBOT_V11_SECRET`）。
+
 建议：
 
 ```bash
@@ -231,7 +235,7 @@ docker compose start
 - [x] 确认实际 NoneBot 项目入口、Python 版本和适配器（例如 OneBot V11）并把 `requirements.txt` 锁定。
 - [ ] 核对 `mlikiowa/napcat-docker` 当前版本的实际挂载路径、UID/GID、WebUI 端口和 OneBot 配置格式；以该镜像仓库当前 README 为准更新 Compose。
 - [ ] 首次启动后确认 NapCat 的反向 WebSocket 地址指向 `ws://nonebot:<port>/onebot/v11/ws`（具体路径以适配器配置为准）。
-- [ ] 暴露nonebot和napcat的端口
+- [x] 暴露 NoneBot `8081`、NapCat `6099/3001` 和 WebUI `8080` 端口
 - [ ] 对两个镜像记录 digest，并建立升级前备份和回滚步骤。
 - [ ] 为 `data/napcat`、`.env.prod` 和依赖目录设置最小权限；必要时将 secrets 改用 Docker secrets 或外部密钥管理。
 - [ ] 增加健康检查、日志轮转、资源限制和监控告警。
