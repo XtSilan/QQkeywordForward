@@ -11,7 +11,12 @@ type Dashboard = {
   config_revision: number;
   napcat: { ok?: boolean; isLogin?: boolean; coreReady?: boolean; loginPhase?: string; error?: string };
   nonebot: { service: string; config_reload: boolean };
+  stats?: { groups: number; keyword_hits_today: number };
 };
+
+type Group = { group_id: string; name: string; avatar_url: string; enabled: number };
+type Keyword = { id: number; display_text: string; group_count: number; bindings: { group_id: string; enabled: number; cooldown_seconds: number }[] };
+type HistoryItem = { id: number; group_id: string; group_name: string; sender_id: string; sender_name: string; keyword_text_snapshot: string; message_text: string; hit_at: string; notify_status: string };
 
 const navItems = [
   ["Dashboard", LayoutDashboard],
@@ -28,6 +33,13 @@ async function getDashboard(): Promise<Dashboard> {
   const response = await fetch("/api/dashboard");
   if (!response.ok) throw new Error("无法读取服务状态");
   return response.json();
+}
+
+async function apiJson<T>(path: string, options?: RequestInit): Promise<T> {
+  const response = await fetch(path, { headers: { "Content-Type": "application/json" }, ...options });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || "请求失败");
+  return body as T;
 }
 
 function StatusDot({ online }: { online: boolean }) {
@@ -107,7 +119,10 @@ function App() {
           </div>
         </header>
         {error && <div className="alert error"><CircleAlert size={17} /><span>{error}</span><button className="icon-button" onClick={() => setError("")} aria-label="关闭错误"><X size={16} /></button></div>}
-        {active === "Dashboard" ? <DashboardPage dashboard={dashboard} action={action} restart={restart} /> : <PlaceholderPage active={active} />}
+        {active === "Dashboard" && <DashboardPage dashboard={dashboard} action={action} restart={restart} />}
+        {active === "关键词" && <KeywordPage onError={setError} />}
+        {active === "历史记录" && <HistoryPage onError={setError} />}
+        {!(["Dashboard", "关键词", "历史记录"] as string[]).includes(active) && <PlaceholderPage active={active} />}
       </main>
     </div>
   );
@@ -123,9 +138,9 @@ function DashboardPage({ dashboard, action, restart }: { dashboard: Dashboard | 
       </div>
       <div className="stat-grid">
         <StatCard icon={<Activity size={18} />} label="NapCat" value={online ? "在线" : "未连接"} detail={dashboard?.napcat?.loginPhase || "等待状态"} tone="green" />
-        <StatCard icon={<MessageSquareText size={18} />} label="关键词命中" value="0" detail="今日累计" tone="blue" />
+        <StatCard icon={<MessageSquareText size={18} />} label="关键词命中" value={String(dashboard?.stats?.keyword_hits_today ?? 0)} detail="今日累计" tone="blue" />
         <StatCard icon={<Send size={18} />} label="群发任务" value="0" detail="等待执行" tone="violet" />
-        <StatCard icon={<Users size={18} />} label="配置群聊" value="-" detail="同步后显示" tone="slate" />
+        <StatCard icon={<Users size={18} />} label="配置群聊" value={String(dashboard?.stats?.groups ?? 0)} detail="已同步群聊" tone="slate" />
       </div>
       <div className="dashboard-grid">
         <section className="panel service-panel">
@@ -162,6 +177,79 @@ function ServiceRow({ name, description, online, busy, onRestart }: { name: stri
 
 function QuickAction({ icon, title, detail }: { icon: ReactNode; title: string; detail: string }) {
   return <button className="quick-action"><div className="quick-icon">{icon}</div><div><strong>{title}</strong><span>{detail}</span></div><ChevronRight size={16} /></button>;
+}
+
+function KeywordPage({ onError }: { onError: (message: string) => void }) {
+  const [keywords, setKeywords] = useState<Keyword[]>([]);
+  const [groups, setGroups] = useState<Group[]>([]);
+  const [text, setText] = useState("");
+  const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [enabled, setEnabled] = useState(true);
+  const [busy, setBusy] = useState(false);
+
+  const load = async () => {
+    try {
+      const [keywordData, groupData] = await Promise.all([
+        apiJson<Keyword[]>("/api/keywords"),
+        apiJson<Group[]>("/api/groups"),
+      ]);
+      setKeywords(keywordData);
+      setGroups(groupData);
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "关键词加载失败");
+    }
+  };
+  useEffect(() => { void load(); }, []);
+
+  const addKeyword = async (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!text.trim()) return;
+    setBusy(true);
+    try {
+      await apiJson("/api/keywords", { method: "POST", body: JSON.stringify({ display_text: text, group_ids: groupIds, enabled }) });
+      setText("");
+      await load();
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "关键词保存失败");
+    } finally { setBusy(false); }
+  };
+
+  const removeKeyword = async (id: number) => {
+    try { await apiJson(`/api/keywords/${id}`, { method: "DELETE" }); await load(); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : "删除失败"); }
+  };
+
+  return <section className="content">
+    <div className="welcome-row"><div><h2>关键词规则</h2><p>输入普通文本即可，系统会按字面匹配。</p></div><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button></div>
+    <section className="panel form-panel">
+      <div className="panel-heading"><div><div className="panel-kicker">NEW RULE</div><h3>添加关键词</h3></div><span className="muted">不需要填写正则</span></div>
+      <form className="keyword-form" onSubmit={(event) => void addKeyword(event)}>
+        <label className="field"><span>关键词</span><input value={text} onChange={(event) => setText(event.target.value)} placeholder="例如：报名、紧急通知" maxLength={200} /></label>
+        <label className="field"><span>应用群聊</span><select multiple value={groupIds} onChange={(event) => setGroupIds(Array.from(event.target.selectedOptions, (option) => option.value))}>{groups.map((group) => <option key={group.group_id} value={group.group_id}>{group.name || "未命名群"} · {group.group_id}</option>)}</select><small>暂未同步群聊时可先保存规则，后续批量应用。</small></label>
+        <label className="check-field"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} /><span>保存后启用</span></label>
+        <button className="button primary" disabled={busy}><KeyRound size={15} />{busy ? "保存中" : "保存关键词"}</button>
+      </form>
+    </section>
+    <section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">RULES</div><h3>已配置关键词</h3></div><span className="muted">{keywords.length} 条</span></div>
+      {keywords.length === 0 ? <div className="empty-state"><div className="empty-icon"><KeyRound size={22} /></div><strong>还没有关键词</strong><span>添加第一条规则后会显示在这里。</span></div> : <div className="table-wrap"><table><thead><tr><th>关键词</th><th>应用群聊</th><th>状态</th><th aria-label="操作" /></tr></thead><tbody>{keywords.map((keyword) => <tr key={keyword.id}><td><strong>{keyword.display_text}</strong><small>字面匹配 · 忽略大小写</small></td><td>{keyword.group_count ? `${keyword.group_count} 个群` : <span className="muted">未绑定</span>}</td><td><span className="status-chip good compact"><StatusDot online />已启用</span></td><td><button className="icon-button danger-button" onClick={() => void removeKeyword(keyword.id)} aria-label={`删除 ${keyword.display_text}`}><X size={16} /></button></td></tr>)}</tbody></table></div>}
+    </section>
+  </section>;
+}
+
+function HistoryPage({ onError }: { onError: (message: string) => void }) {
+  const [items, setItems] = useState<HistoryItem[]>([]);
+  const [total, setTotal] = useState(0);
+  const load = async () => {
+    try { const data = await apiJson<{ items: HistoryItem[]; total: number }>("/api/history?limit=100"); setItems(data.items); setTotal(data.total); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : "历史记录加载失败"); }
+  };
+  useEffect(() => { void load(); }, []);
+  return <section className="content">
+    <div className="welcome-row"><div><h2>历史记录</h2><p>关键词命中会保留群、发送者和原始文本。</p></div><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button></div>
+    <section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">HISTORY</div><h3>关键词命中</h3></div><span className="muted">共 {total} 条</span></div>
+      {items.length === 0 ? <div className="empty-state"><div className="empty-icon"><FileText size={22} /></div><strong>暂无命中记录</strong><span>机器人识别到关键词后会显示在这里。</span></div> : <div className="table-wrap"><table><thead><tr><th>时间</th><th>群聊</th><th>发送者</th><th>命中</th><th>消息</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td className="nowrap">{new Date(item.hit_at).toLocaleString("zh-CN", { hour12: false })}</td><td><strong>{item.group_name || "未命名群"}</strong><small>{item.group_id}</small></td><td>{item.sender_name || "未知"}<small>{item.sender_id}</small></td><td><span className="keyword-tag">{item.keyword_text_snapshot}</span></td><td className="message-cell">{item.message_text || "（非文本消息）"}</td></tr>)}</tbody></table></div>}
+    </section>
+  </section>;
 }
 
 function PlaceholderPage({ active }: { active: string }) {
