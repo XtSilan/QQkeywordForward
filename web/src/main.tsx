@@ -134,6 +134,7 @@ function App() {
         {active === "运行日志" && <LogsPage onError={setError} />}
         {active === "通知" && <NotificationsPage onError={setError} />}
         {active === "群发任务" && <BroadcastPage onError={setError} />}
+        {active === "系统设置" && <SystemSettingsPage onError={setError} />}
         {!(["Dashboard", "关键词", "历史记录", "登录与 NapCat", "运行日志", "通知", "群发任务"] as string[]).includes(active) && <PlaceholderPage active={active} />}
       </main>
     </div>
@@ -365,6 +366,14 @@ function BroadcastPage({ onError }: { onError: (message: string) => void }) {
 
 function PlaceholderPage({ active }: { active: string }) {
   return <section className="content"><div className="placeholder panel"><div className="empty-icon"><Settings2 size={22} /></div><h2>{active}</h2><p>这一页的 API 和交互将在下一轮接入，当前导航和运行状态已经可用。</p></div></section>;
+}
+
+function SystemSettingsPage({ onError }: { onError: (message: string) => void }) {
+  const [smtp, setSmtp] = useState({ host: "", port: 587, username: "", from_address: "", password: "", starttls: true, ssl: false, timeout: 15 });
+  const [onebot, setOnebot] = useState({ enable: false, url: "", reconnectInterval: 5000, heartInterval: 30000, verifyCertificate: true, token: "" });
+  useEffect(() => { void Promise.all([apiJson<any>("/api/settings/smtp"), apiJson<any>("/api/settings/onebot")]).then(([s, o]) => { setSmtp((v) => ({ ...v, ...s })); setOnebot((v) => ({ ...v, ...(o.websocket_client || {}) })); }).catch((e) => onError(e instanceof Error ? e.message : "设置读取失败")); }, []);
+  const save = async (path: string, value: unknown) => { try { await apiJson(path, { method: "PUT", body: JSON.stringify(value) }); } catch (e) { onError(e instanceof Error ? e.message : "保存失败"); } };
+  return <section className="content"><div className="welcome-row"><div><h2>系统设置</h2><p>SMTP 邮件和 NapCat OneBot 反向连接配置。</p></div></div><section className="panel form-panel"><h3>SMTP 邮件</h3><form className="broadcast-form" onSubmit={(e) => { e.preventDefault(); void save("/api/settings/smtp", smtp); }}><label className="field"><span>主机</span><input value={smtp.host} onChange={(e) => setSmtp({ ...smtp, host: e.target.value })} /></label><label className="field"><span>端口</span><input type="number" value={smtp.port} onChange={(e) => setSmtp({ ...smtp, port: Number(e.target.value) })} /></label><label className="field"><span>用户名</span><input value={smtp.username} onChange={(e) => setSmtp({ ...smtp, username: e.target.value })} /></label><label className="field"><span>密码</span><input type="password" value={smtp.password} onChange={(e) => setSmtp({ ...smtp, password: e.target.value })} /></label><label className="field"><span>发件地址</span><input value={smtp.from_address} onChange={(e) => setSmtp({ ...smtp, from_address: e.target.value })} /></label><button className="button primary">保存 SMTP</button></form></section><section className="panel form-panel"><h3>OneBot 反向 WebSocket</h3><form className="broadcast-form" onSubmit={(e) => { e.preventDefault(); void save("/api/settings/onebot", onebot); }}><label className="check-field"><input type="checkbox" checked={onebot.enable} onChange={(e) => setOnebot({ ...onebot, enable: e.target.checked })} />启用连接</label><label className="field field-wide"><span>URL</span><input value={onebot.url} onChange={(e) => setOnebot({ ...onebot, url: e.target.value })} placeholder="ws://nonebot:8081/onebot/v11/ws" /></label><label className="field"><span>Token</span><input type="password" value={onebot.token} onChange={(e) => setOnebot({ ...onebot, token: e.target.value })} /></label><button className="button primary">保存 OneBot 配置</button></form></section></section>;
 }
 
 createRoot(document.getElementById("root")!).render(<StrictMode><App /></StrictMode>);
