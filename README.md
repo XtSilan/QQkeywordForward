@@ -26,7 +26,7 @@
 ### 1. 准备项目和数据目录
 
 ```bash
-git clone <你的仓库地址> qq_bot_forward
+git clone https://github.com/XtSilan/qq_bot_forward.git
 cd qq_bot_forward
 mkdir -p data/napcat data/nonebot data/logs/nonebot
 ```
