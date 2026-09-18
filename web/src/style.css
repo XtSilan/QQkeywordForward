@@ -186,6 +186,57 @@ td small { margin-top: 3px; color: #9aa4b2; font-size: 10px; }
   .field-wide { grid-column: auto; }
   .group-settings { grid-template-columns: 1fr; }
 }
+
+/* shadcn/ui inspired surface and selection primitives */
+:root { color: #09090b; background: #fafafa; }
+body { background: #fafafa; color: #09090b; }
+.sidebar { width: 232px; flex-basis: 232px; background: #fff; color: #71717a; border-right: 1px solid #e4e4e7; padding: 20px 12px 16px; }
+.brand { color: #09090b; border-bottom: 1px solid #f0f0f2; padding-bottom: 20px; }
+.brand span { color: #a1a1aa; }
+.brand-mark { background: #18181b; border-radius: 8px; }
+.sidebar-caption { color: #a1a1aa; }
+.nav-item { color: #71717a; border-radius: 6px; }
+.nav-item:hover { background: #f4f4f5; color: #18181b; }
+.nav-item.active { color: #18181b; background: #f4f4f5; box-shadow: inset 2px 0 #18181b; }
+.nav-pill { border-color: #e4e4e7; color: #71717a; }
+.sidebar-footer { border-top-color: #f0f0f2; }
+.topbar { min-height: 76px; background: rgba(255,255,255,.92); border-bottom-color: #e4e4e7; }
+h1, h2, h3 { color: #09090b; }
+.content { max-width: 1280px; }
+.panel, .stat-card { border-color: #e4e4e7; border-radius: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.03); }
+.button { border-radius: 7px; }
+.button.primary { background: #18181b; color: #fff; }
+.button.primary:hover { background: #27272a; }
+.button.secondary, .button.ghost { color: #27272a; border-color: #d4d4d8; background: #fff; }
+.button.secondary:hover, .button.ghost:hover { background: #f4f4f5; }
+.field input, .field select, .field textarea { border-color: #d4d4d8; border-radius: 7px; background: #fff; }
+.field input:focus, .field select:focus, .field textarea:focus { outline: 2px solid rgba(24,24,27,.12); border-color: #71717a; }
+.status-chip.good { color: #166534; background: #f0fdf4; border-color: #bbf7d0; }
+.status-chip.warn { color: #854d0e; background: #fefce8; border-color: #fde68a; }
+.group-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; width: 100%; }
+.group-card { min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px 11px; border: 1px solid #e4e4e7; border-radius: 9px; color: #27272a; background: #fff; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
+.group-card:hover { border-color: #a1a1aa; background: #fafafa; }
+.group-card.selected { border-color: #18181b; background: #fafafa; box-shadow: 0 0 0 1px #18181b; }
+.group-card img, .group-avatar-fallback { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; object-fit: cover; }
+.group-avatar-fallback { display: grid; place-items: center; color: #fff; background: #71717a; font-size: 14px; font-weight: 700; }
+.group-card-copy { min-width: 0; flex: 1; }
+.group-card-copy strong, .group-card-copy small { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.group-card-copy strong { color: #18181b; font-size: 12px; }
+.group-card-copy small { margin-top: 3px; color: #a1a1aa; font-size: 10px; }
+.group-check { width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid #d4d4d8; border-radius: 5px; color: #fff; font-size: 12px; }
+.group-check.checked { border-color: #18181b; background: #18181b; }
+.group-picker-empty { padding: 14px; border: 1px dashed #d4d4d8; border-radius: 8px; color: #a1a1aa; background: #fafafa; font-size: 12px; }
+.bulk-layout { display: grid; grid-template-columns: minmax(180px, 1fr) 160px auto auto; align-items: end; gap: 12px; margin-bottom: 16px; }
+.message-image { position: relative; display: inline-flex; align-items: flex-start; margin: 8px 8px 0 0; }
+.message-image img { width: 72px; height: 72px; object-fit: cover; border: 1px solid #e4e4e7; border-radius: 8px; }
+.message-image .icon-button { position: absolute; top: -7px; right: -7px; width: 22px; height: 22px; border: 1px solid #e4e4e7; background: #fff; }
+.log-output { border: 1px solid #e4e4e7; border-radius: 8px; background: #09090b; color: #e4e4e7; padding: 14px; }
+.log-tabs { border-bottom-color: #e4e4e7; }
+.log-tab.active { color: #18181b; border-bottom-color: #18181b; }
+
+@media (max-width: 960px) {
+  .bulk-layout { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 430px) {
   .stat-grid, .quick-grid { grid-template-columns: 1fr; }
   h1 { font-size: 19px; }

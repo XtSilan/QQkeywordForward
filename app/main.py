@@ -160,6 +160,13 @@ class NotificationSettingsPayload(BaseModel):
     destination_ids: list[int] = Field(default_factory=list)
 
 
+class NotificationBulkApply(BaseModel):
+    group_ids: list[str] = Field(min_length=1)
+    qq_enabled: bool = False
+    email_enabled: bool = False
+    destination_ids: list[int] = Field(default_factory=list)
+
+
 class BroadcastTaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     group_ids: list[str] = Field(min_length=1)
@@ -601,6 +608,30 @@ def put_notification_settings(group_id: str, payload: NotificationSettingsPayloa
     return {"saved": True, "revision": bump_config_revision()}
 
 
+@app.post("/api/notification-settings/bulk-apply", dependencies=[Depends(admin_guard)])
+def bulk_apply_notification_settings(payload: NotificationBulkApply) -> dict[str, Any]:
+    group_ids = list(dict.fromkeys(group_id.strip() for group_id in payload.group_ids if group_id.strip()))
+    if not group_ids:
+        raise HTTPException(status_code=422, detail="at least one group is required")
+    destination_ids = list(dict.fromkeys(payload.destination_ids))
+    with connection() as conn:
+        for group_id in group_ids:
+            conn.execute("INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,))
+            conn.execute(
+                "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET "
+                "qq_enabled=excluded.qq_enabled, email_enabled=excluded.email_enabled, updated_at=CURRENT_TIMESTAMP",
+                (group_id, int(payload.qq_enabled), int(payload.email_enabled)),
+            )
+            conn.execute("DELETE FROM notification_destination_bindings WHERE group_id=?", (group_id,))
+            for destination_id in destination_ids:
+                conn.execute(
+                    "INSERT OR IGNORE INTO notification_destination_bindings(group_id, destination_id) VALUES (?, ?)",
+                    (group_id, destination_id),
+                )
+    return {"applied": len(group_ids), "revision": bump_config_revision()}
+
+
 @app.get("/api/broadcast-tasks", dependencies=[Depends(admin_guard)])
 def broadcast_tasks(limit: int = Query(default=50, ge=1, le=200)) -> list[dict[str, Any]]:
     with connection() as conn:
@@ -746,9 +777,23 @@ async def service_logs(
     client: NapCatClient = Depends(napcat),
 ) -> PlainTextResponse:
     try:
+        # NapCat's WebUI log list is a metadata endpoint and may be empty even while
+        # the container is producing logs. The Docker log stream is the authoritative
+        # source for the WebUI log panel when socket control is enabled.
+        if settings.control_enabled:
+            return PlainTextResponse(await DockerControl(settings).logs(service, tail))
         if service == "napcat" and (settings.napcat_webui_credential or settings.napcat_webui_token):
-            data = await client.log_list()
-            return PlainTextResponse(str(data))
+            listing = await client.log_list()
+            if not isinstance(listing, list) or not listing:
+                return PlainTextResponse("NapCat 没有返回文件日志；请启用 Docker socket 日志读取。")
+            latest = listing[-1]
+            if isinstance(latest, dict):
+                filename = latest.get("id") or latest.get("name") or latest.get("filename")
+            else:
+                filename = str(latest)
+            if not filename:
+                return PlainTextResponse("NapCat 日志文件名为空；请启用 Docker socket 日志读取。")
+            return PlainTextResponse(str(await client.log_file(str(filename))))
         return PlainTextResponse(await DockerControl(settings).logs(service, tail))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

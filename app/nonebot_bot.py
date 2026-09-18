@@ -74,6 +74,11 @@ def message_text(message: Message) -> str:
     return "".join(segment.data.get("text", "") for segment in message if segment.type == "text")
 
 
+def message_segments(message: Message) -> list[dict[str, object]]:
+    """Serialize OneBot message segments without relying on adapter-specific helpers."""
+    return [{"type": segment.type, "data": dict(segment.data)} for segment in message]
+
+
 def run() -> None:
     settings = get_settings()
     init_db()
@@ -137,7 +142,7 @@ def run() -> None:
                         event.sender.card or event.sender.nickname or "",
                         row["id"],
                         row["display_text"],
-                        json.dumps(event.get_message().export(), ensure_ascii=False),
+                        json.dumps(message_segments(event.get_message()), ensure_ascii=False),
                         text,
                         str(event.message_id),
                         datetime.now(timezone.utc).isoformat(),

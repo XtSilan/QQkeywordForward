@@ -48,4 +48,21 @@ class DockerControl:
             )
         if response.status_code != 200:
             raise RuntimeError(f"docker logs failed: {response.status_code}")
-        return response.content.decode("utf-8", errors="replace")
+        return self._decode_log_stream(response.content)
+
+    @staticmethod
+    def _decode_log_stream(payload: bytes) -> str:
+        """Decode Docker's multiplexed stdout/stderr stream into readable text."""
+        chunks: list[bytes] = []
+        offset = 0
+        while offset + 8 <= len(payload):
+            size = int.from_bytes(payload[offset + 4:offset + 8], "big")
+            start = offset + 8
+            end = start + size
+            if end > len(payload):
+                break
+            chunks.append(payload[start:end])
+            offset = end
+        if chunks and offset == len(payload):
+            return b"".join(chunks).decode("utf-8", errors="replace")
+        return payload.decode("utf-8", errors="replace")
