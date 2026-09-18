@@ -150,12 +150,17 @@ def run() -> None:
                 )
                 hit_id = int(cursor.lastrowid)
                 destinations = conn.execute(
-                    "SELECT d.id FROM notification_destinations d "
-                    "JOIN notification_destination_bindings b ON b.destination_id=d.id "
+                    "SELECT DISTINCT d.id FROM notification_destinations d "
+                    "WHERE d.enabled=1 AND ("
+                    "EXISTS (SELECT 1 FROM keyword_notification_bindings kb "
+                    "WHERE kb.keyword_id=? AND kb.destination_id=d.id AND kb.enabled=1) "
+                    "OR (NOT EXISTS (SELECT 1 FROM keyword_notification_bindings kbx "
+                    "WHERE kbx.keyword_id=?) AND EXISTS (SELECT 1 FROM notification_destination_bindings b "
                     "JOIN group_notification_settings s ON s.group_id=b.group_id "
-                    "WHERE b.group_id=? AND d.enabled=1 AND ((d.kind='qq' AND s.qq_enabled=1) "
-                    "OR (d.kind='email' AND s.email_enabled=1))",
-                    (str(event.group_id),),
+                    "WHERE b.group_id=? AND b.destination_id=d.id "
+                    "AND ((d.kind='qq' AND s.qq_enabled=1) OR (d.kind='email' AND s.email_enabled=1))))"
+                    ")",
+                    (row["id"], row["id"], str(event.group_id)),
                 ).fetchall()
                 for destination in destinations:
                     conn.execute(

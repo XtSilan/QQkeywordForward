@@ -16,7 +16,7 @@ type Dashboard = {
 };
 
 type Group = { group_id: string; name: string; avatar_url: string; enabled: number };
-type Keyword = { id: number; display_text: string; group_count: number; bindings: { group_id: string; enabled: number; cooldown_seconds: number }[] };
+type Keyword = { id: number; display_text: string; group_count: number; destination_ids?: number[]; bindings: { group_id: string; enabled: number; cooldown_seconds: number }[] };
 type HistoryItem = { id: number; group_id: string; group_name: string; sender_id: string; sender_name: string; keyword_text_snapshot: string; message_text: string; hit_at: string; notify_status: string };
 type Destination = { id: number; kind: "qq" | "email"; address: string; display_name: string; enabled: number; group_ids: string[] };
 type BroadcastTask = { id: string; title: string; status: string; total_count: number; sent_count: number; failed_count: number; interval_seconds: number; created_at: string };
@@ -25,7 +25,6 @@ type MessageSegment = { type: "text" | "image"; data: { text?: string; file?: st
 const navItems = [
   ["Dashboard", LayoutDashboard],
   ["关键词", KeyRound],
-  ["通知", Bell],
   ["历史记录", FileText],
   ["群发任务", Send],
   ["登录与 NapCat", ShieldCheck],
@@ -132,10 +131,9 @@ function App() {
         {active === "历史记录" && <HistoryPage onError={setError} />}
         {active === "登录与 NapCat" && <NapCatPage onError={setError} />}
         {active === "运行日志" && <LogsPage onError={setError} />}
-        {active === "通知" && <NotificationsPage onError={setError} />}
         {active === "群发任务" && <BroadcastPage onError={setError} />}
         {active === "系统设置" && <SystemSettingsPage onError={setError} />}
-        {!(["Dashboard", "关键词", "历史记录", "登录与 NapCat", "运行日志", "通知", "群发任务", "系统设置"] as string[]).includes(active) && <PlaceholderPage active={active} />}
+        {!(["Dashboard", "关键词", "历史记录", "登录与 NapCat", "运行日志", "群发任务", "系统设置"] as string[]).includes(active) && <PlaceholderPage active={active} />}
       </main>
     </div>
   );
@@ -227,58 +225,79 @@ function GroupPicker({ groups, selected, onChange, single = false }: { groups: G
   }} />)}</div>;
 }
 
+function DestinationPicker({ destinations, selected, onChange }: { destinations: Destination[]; selected: number[]; onChange: (ids: number[]) => void }) {
+  if (!destinations.length) return <div className="group-picker-empty">暂无可用提醒地址，请先到“提醒地址”添加 QQ 或邮箱。</div>;
+  return <div className="destination-picker">{destinations.map((destination) => {
+    const checked = selected.includes(destination.id);
+    return <button type="button" key={destination.id} className={checked ? "destination-card selected" : "destination-card"} onClick={() => onChange(checked ? selected.filter((id) => id !== destination.id) : [...selected, destination.id])}>
+      <span className="channel-icon">{destination.kind === "qq" ? "Q" : "@"}</span><span className="destination-copy"><strong>{destination.display_name || (destination.kind === "qq" ? "QQ 好友" : "邮箱")}</strong><small>{destination.address}</small></span><span className={checked ? "group-check checked" : "group-check"}>{checked ? "✓" : ""}</span>
+    </button>;
+  })}</div>;
+}
+
 function KeywordPage({ onError }: { onError: (message: string) => void }) {
   const [keywords, setKeywords] = useState<Keyword[]>([]);
   const [groups, setGroups] = useState<Group[]>([]);
+  const [destinations, setDestinations] = useState<Destination[]>([]);
   const [text, setText] = useState("");
   const [groupIds, setGroupIds] = useState<string[]>([]);
+  const [destinationIds, setDestinationIds] = useState<number[]>([]);
+  const [newQqAddresses, setNewQqAddresses] = useState("");
+  const [newEmailAddresses, setNewEmailAddresses] = useState("");
+  const [newDestinationName, setNewDestinationName] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [keywordOpen, setKeywordOpen] = useState(false);
-  const [keywordStep, setKeywordStep] = useState<1 | 2>(1);
+  const [keywordStep, setKeywordStep] = useState<1 | 2 | 3>(1);
   const [editingKeyword, setEditingKeyword] = useState<Keyword | null>(null);
   const [groupSearch, setGroupSearch] = useState("");
   const [busy, setBusy] = useState(false);
-
+  const parseKeywords = (value: string) => Array.from(new Set(value.split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean)));
   const load = async () => {
     try {
-      const [keywordData, groupData] = await Promise.all([
-        apiJson<Keyword[]>("/api/keywords"),
-        apiJson<Group[]>("/api/groups"),
-      ]);
-      setKeywords(keywordData);
-      setGroups(groupData);
-    } catch (reason) {
-      onError(reason instanceof Error ? reason.message : "关键词加载失败");
-    }
+      const [keywordData, groupData, destinationData] = await Promise.all([apiJson<Keyword[]>("/api/keywords"), apiJson<Group[]>("/api/groups"), apiJson<Destination[]>("/api/destinations")]);
+      setKeywords(keywordData); setGroups(groupData); setDestinations(destinationData.filter((item) => Boolean(item.enabled)));
+    } catch (reason) { onError(reason instanceof Error ? reason.message : "关键词加载失败"); }
   };
   useEffect(() => { void load(); }, []);
-
   const openKeyword = (keyword: Keyword | null = null) => {
-    setEditingKeyword(keyword); setText(keyword?.display_text || ""); setGroupIds(keyword?.bindings.map((binding) => binding.group_id) || []); setEnabled(keyword ? keyword.bindings.some((binding) => Boolean(binding.enabled)) : true); setGroupSearch(""); setKeywordStep(1); setKeywordOpen(true);
+    setEditingKeyword(keyword); setText(keyword?.display_text || ""); setGroupIds(keyword?.bindings.map((binding) => binding.group_id) || []); setDestinationIds(keyword?.destination_ids || []); setNewQqAddresses(""); setNewEmailAddresses(""); setNewDestinationName(""); setEnabled(keyword ? keyword.bindings.some((binding) => Boolean(binding.enabled)) : true); setGroupSearch(""); setKeywordStep(1); setKeywordOpen(true);
   };
   const saveKeyword = async () => {
-    if (!text.trim() || !groupIds.length) { onError("请输入关键词并至少选择一个应用群聊"); return; }
+    const parsed = parseKeywords(text);
+    if (!parsed.length || !groupIds.length) { onError("请输入关键词并至少选择一个应用群聊"); return; }
+    if (editingKeyword && parsed.length !== 1) { onError("编辑已有关键词时请只保留一个关键词；新增时可以一次输入多个"); return; }
     setBusy(true);
     try {
-      if (editingKeyword) {
-        await apiJson(`/api/keywords/${editingKeyword.id}`, { method: "PATCH", body: JSON.stringify({ display_text: text, enabled }) });
-        await apiJson("/api/keywords/bulk-apply", { method: "POST", body: JSON.stringify({ keyword_id: editingKeyword.id, group_ids: groupIds, enabled, cooldown_seconds: 60, replace_existing: true }) });
-      } else {
-        await apiJson("/api/keywords", { method: "POST", body: JSON.stringify({ display_text: text, group_ids: groupIds, enabled }) });
+      const splitAddresses = (value: string) => Array.from(new Set(value.split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean)));
+      const channels: { kind: "qq" | "email"; address: string; display_name: string }[] = [];
+      splitAddresses(newQqAddresses).forEach((address, index) => channels.push({ kind: "qq", address, display_name: newDestinationName || `QQ 提醒 ${index + 1}` }));
+      splitAddresses(newEmailAddresses).forEach((address, index) => channels.push({ kind: "email", address, display_name: newDestinationName || `邮箱提醒 ${index + 1}` }));
+      let finalDestinationIds = [...destinationIds];
+      if (channels.length) {
+        const created = await apiJson<{ destination_ids: number[] }>("/api/notification-configs", { method: "POST", body: JSON.stringify({ channels, group_ids: groupIds }) });
+        finalDestinationIds = Array.from(new Set([...finalDestinationIds, ...created.destination_ids]));
       }
-      setKeywordOpen(false); setText(""); setGroupIds([]); await load();
+      if (!finalDestinationIds.length) throw new Error("请至少选择或填写一个 QQ/邮箱提醒地址");
+      if (editingKeyword) {
+        await apiJson(`/api/keywords/${editingKeyword.id}`, { method: "PATCH", body: JSON.stringify({ display_text: parsed[0], enabled }) });
+        await apiJson("/api/keywords/bulk-apply", { method: "POST", body: JSON.stringify({ keyword_id: editingKeyword.id, group_ids: groupIds, enabled, cooldown_seconds: 60, replace_existing: true }) });
+        await apiJson(`/api/keywords/${editingKeyword.id}/notifications`, { method: "PUT", body: JSON.stringify({ destination_ids: finalDestinationIds }) });
+      } else {
+        await apiJson("/api/keyword-configs", { method: "POST", body: JSON.stringify({ keywords: parsed, group_ids: groupIds, destination_ids: finalDestinationIds, enabled, cooldown_seconds: 60 }) });
+      }
+      setKeywordOpen(false); setText(""); setGroupIds([]); setDestinationIds([]); setNewQqAddresses(""); setNewEmailAddresses(""); await load();
     } catch (reason) { onError(reason instanceof Error ? reason.message : "关键词保存失败"); } finally { setBusy(false); }
   };
-
-  const removeKeyword = async (id: number) => {
-    try { await apiJson(`/api/keywords/${id}`, { method: "DELETE" }); await load(); }
-    catch (reason) { onError(reason instanceof Error ? reason.message : "删除失败"); }
-  };
-
+  const removeKeyword = async (id: number) => { try { await apiJson(`/api/keywords/${id}`, { method: "DELETE" }); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "删除失败"); } };
+  const visibleGroups = groups.filter((group) => `${group.name} ${group.group_id}`.toLowerCase().includes(groupSearch.toLowerCase()));
   return <section className="content">
-    <div className="welcome-row"><div><h2>关键词规则</h2><p>添加关键词后，再选择应用群聊；每个关键词独立管理。</p></div><div className="row-actions"><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button><button className="button primary" onClick={() => openKeyword()}><KeyRound size={15} />添加关键词</button></div></div>
-    {keywordOpen && <div className="wizard-overlay"><section className="panel wizard-card keyword-wizard"><div className="wizard-head"><div><div className="panel-kicker">STEP {keywordStep} OF 2</div><h3>{editingKeyword ? "编辑关键词" : "添加关键词"}</h3></div><button className="icon-button" onClick={() => setKeywordOpen(false)}><X size={16} /></button></div>{keywordStep === 1 ? <><p className="wizard-help">输入要匹配的普通文本，系统会自动按字面内容匹配。</p><label className="field"><span>关键词</span><input autoFocus value={text} onChange={(event) => setText(event.target.value)} placeholder="例如：报名、紧急通知" maxLength={200} /></label><label className="check-field"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />启用这个关键词</label><div className="wizard-actions"><button className="button primary" onClick={() => setKeywordStep(2)} disabled={!text.trim()}>下一步：选择应用群聊<ChevronRight size={15} /></button></div></> : <><p className="wizard-help">搜索并勾选要应用这个关键词的群聊，可一次选择多个。</p><label className="search-field"><span>⌕</span><input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="搜索群名称或群号" /></label><GroupPicker groups={groups.filter((group) => `${group.name} ${group.group_id}`.toLowerCase().includes(groupSearch.toLowerCase()))} selected={groupIds} onChange={setGroupIds} /><div className="wizard-actions"><button className="button secondary" onClick={() => setKeywordStep(1)}>上一步</button><button className="button primary" onClick={() => void saveKeyword()} disabled={busy || !groupIds.length}>{busy ? "保存中" : "保存关键词"}</button></div></>}</section></div>}
-    <section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">CONFIGURED</div><h3>已配置关键词</h3></div><span className="muted">{keywords.length} 条</span></div>{keywords.length === 0 ? <div className="empty-state"><div className="empty-icon"><KeyRound size={22} /></div><strong>还没有关键词</strong><span>点击“添加关键词”开始配置。</span></div> : <div className="keyword-list">{keywords.map((keyword) => { const active = keyword.bindings.some((binding) => Boolean(binding.enabled)); const names = keyword.bindings.map((binding) => groups.find((group) => group.group_id === binding.group_id)?.name || binding.group_id); return <div className="keyword-row" key={keyword.id}><div className="keyword-main"><span className="keyword-badge">{keyword.display_text.slice(0, 1)}</span><div><strong>{keyword.display_text}</strong><small>应用群聊：{names.join("、") || "未绑定"}</small></div></div><span className="keyword-count">{names.length} 个群</span><label className="switch"><input type="checkbox" checked={active} onChange={() => void apiJson(`/api/keywords/${keyword.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !active }) }).then(load).catch((reason) => onError(reason instanceof Error ? reason.message : "关键词开关保存失败"))} /><span /></label><button className="button ghost compact-button" onClick={() => openKeyword(keyword)}>编辑</button><button className="icon-button danger-button" onClick={() => void removeKeyword(keyword.id)} aria-label={`删除 ${keyword.display_text}`}><X size={16} /></button></div>; })}</div>}</section>
+    <div className="welcome-row"><div><h2>关键词规则</h2><p>一次输入多个关键词，再统一选择群聊和提醒地址。</p></div><div className="row-actions"><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button><button className="button primary" onClick={() => openKeyword()}><KeyRound size={15} />添加关键词</button></div></div>
+    {keywordOpen && <div className="wizard-overlay"><section className="panel wizard-card keyword-wizard"><div className="wizard-head"><div><div className="panel-kicker">STEP {keywordStep} OF 3</div><h3>{editingKeyword ? "编辑关键词" : "添加关键词"}</h3></div><button className="icon-button" onClick={() => setKeywordOpen(false)}><X size={16} /></button></div>
+      {keywordStep === 1 && <><p className="wizard-help">每行一个，也可以使用中文逗号、英文逗号或空格分隔。Shift + Enter 可继续换行。</p><label className="field"><span>关键词列表</span><textarea autoFocus value={text} onChange={(event) => setText(event.target.value)} placeholder={editingKeyword ? "例如：报名" : "报名\n紧急通知，活动通知"} rows={7} /></label><label className="check-field"><input type="checkbox" checked={enabled} onChange={(event) => setEnabled(event.target.checked)} />启用这些关键词</label><div className="wizard-actions"><button className="button primary" onClick={() => setKeywordStep(2)} disabled={!parseKeywords(text).length}>下一步：选择应用群聊<ChevronRight size={15} /></button></div></>}
+      {keywordStep === 2 && <><p className="wizard-help">搜索并勾选这些关键词要监听的群聊。</p><label className="search-field"><span>⌕</span><input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="搜索群名称或群号" /></label><GroupPicker groups={visibleGroups} selected={groupIds} onChange={setGroupIds} /><div className="wizard-actions"><button className="button secondary" onClick={() => setKeywordStep(1)}>上一步</button><button className="button primary" onClick={() => setKeywordStep(3)} disabled={!groupIds.length}>下一步：选择提醒<ChevronRight size={15} /></button></div></>}
+      {keywordStep === 3 && <><p className="wizard-help">勾选已有提醒地址，或直接填写新的 QQ/邮箱。多个地址可用换行、逗号或空格分隔。</p><DestinationPicker destinations={destinations} selected={destinationIds} onChange={setDestinationIds} /><div className="inline-destination-form"><label className="field"><span>新增 QQ 号（可多个）</span><textarea rows={3} value={newQqAddresses} onChange={(event) => setNewQqAddresses(event.target.value)} placeholder="2890207721, 123456789" /></label><label className="field"><span>新增邮箱（可多个）</span><textarea rows={3} value={newEmailAddresses} onChange={(event) => setNewEmailAddresses(event.target.value)} placeholder="name@example.com ops@example.com" /></label><label className="field destination-note"><span>备注（选填）</span><input value={newDestinationName} onChange={(event) => setNewDestinationName(event.target.value)} placeholder="例如：管理员" /></label></div><div className="wizard-actions"><button className="button secondary" onClick={() => setKeywordStep(2)}>上一步</button><button className="button primary" onClick={() => void saveKeyword()} disabled={busy || (!destinationIds.length && !newQqAddresses.trim() && !newEmailAddresses.trim())}>{busy ? "保存中" : "保存关键词与提醒"}</button></div></>}
+    </section></div>}
+    <section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">CONFIGURED</div><h3>已配置关键词</h3></div><span className="muted">{keywords.length} 条</span></div>{keywords.length === 0 ? <div className="empty-state"><div className="empty-icon"><KeyRound size={22} /></div><strong>还没有关键词</strong><span>点击“添加关键词”开始配置。</span></div> : <div className="keyword-list">{keywords.map((keyword) => { const active = keyword.bindings.some((binding) => Boolean(binding.enabled)); const names = keyword.bindings.map((binding) => groups.find((group) => group.group_id === binding.group_id)?.name || binding.group_id); const notifyCount = keyword.destination_ids?.length || 0; return <div className="keyword-row" key={keyword.id}><div className="keyword-main"><span className="keyword-badge">{keyword.display_text.slice(0, 1)}</span><div><strong>{keyword.display_text}</strong><small>应用群聊：{names.join("、") || "未绑定"} · 提醒 {notifyCount} 个</small></div></div><span className="keyword-count">{names.length} 个群</span><label className="switch" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={active} onChange={() => void apiJson(`/api/keywords/${keyword.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !active }) }).then(load).catch((reason) => onError(reason instanceof Error ? reason.message : "关键词开关保存失败"))} /><span /></label><button className="button ghost compact-button" onClick={() => openKeyword(keyword)}>编辑</button><button className="icon-button danger-button" onClick={() => void removeKeyword(keyword.id)} aria-label={`删除 ${keyword.display_text}`}><X size={16} /></button></div>; })}</div>}</section>
   </section>;
 }
 
@@ -381,7 +400,10 @@ function NotificationsPage({ onError }: { onError: (message: string) => void }) 
         const display_name = qqChecked ? qqName : emailName;
         await apiJson(`/api/destinations/${editingId}`, { method: "PUT", body: JSON.stringify({ kind, address, display_name, enabled: true, group_ids: selectedGroups }) });
       } else {
-        const channels = []; if (qqChecked) channels.push({ kind: "qq", address: qqAddress, display_name: qqName }); if (emailChecked) channels.push({ kind: "email", address: emailAddress, display_name: emailName });
+        const splitAddresses = (value: string) => value.split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean);
+        const channels: { kind: "qq" | "email"; address: string; display_name: string }[] = [];
+        if (qqChecked) splitAddresses(qqAddress).forEach((address, index) => channels.push({ kind: "qq", address, display_name: qqName || `QQ 好友 ${index + 1}` }));
+        if (emailChecked) splitAddresses(emailAddress).forEach((address, index) => channels.push({ kind: "email", address, display_name: emailName || `邮箱 ${index + 1}` }));
         if (!channels.length) throw new Error("请至少选择 QQ 或邮箱一种提醒方式");
         await apiJson("/api/notification-configs", { method: "POST", body: JSON.stringify({ channels, group_ids: selectedGroups }) });
       }
@@ -391,8 +413,8 @@ function NotificationsPage({ onError }: { onError: (message: string) => void }) 
   const toggle = async (item: Destination) => { try { await apiJson(`/api/destinations/${item.id}`, { method: "PUT", body: JSON.stringify({ kind: item.kind, address: item.address, display_name: item.display_name, enabled: !Boolean(item.enabled), group_ids: item.group_ids }) }); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "提醒开关保存失败"); } };
   const remove = async (id: number) => { try { await apiJson(`/api/destinations/${id}`, { method: "DELETE" }); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "删除提醒失败"); } };
   const visibleGroups = groups.filter((group) => `${group.name} ${group.group_id}`.toLowerCase().includes(groupSearch.toLowerCase()));
-  return <section className="content"><div className="welcome-row"><div><h2>提醒设置</h2><p>先选择 QQ/邮箱提醒方式，再选择应用群聊，保存后即可触发通知。</p></div><div className="row-actions"><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button><button className="button primary" onClick={reset}><Bell size={15} />添加提醒</button></div></div>
-    {open && <div className="wizard-overlay"><section className="panel form-panel wizard-card"><div className="wizard-head"><div><div className="panel-kicker">STEP {step} OF 2</div><h3>{editingId === null ? "添加提醒" : "编辑提醒"}</h3></div><button className="icon-button" onClick={() => setOpen(false)}><X size={16} /></button></div>{step === 1 ? <><p className="wizard-help">选择提醒方式。勾选后填写对应地址和备注。</p><div className="channel-grid"><div className={qqChecked ? "channel-card selected" : "channel-card"} onClick={() => setQqChecked((value) => !value)}><div className="channel-title"><span className="channel-icon">Q</span><strong>QQ 好友</strong><input type="checkbox" checked={qqChecked} onChange={() => setQqChecked((value) => !value)} onClick={(event) => event.stopPropagation()} /></div>{qqChecked && <div className="channel-fields"><label className="field"><span>QQ 号</span><input value={qqAddress} onChange={(event) => setQqAddress(event.target.value)} placeholder="例如 2890207721" /></label><label className="field"><span>备注</span><input value={qqName} onChange={(event) => setQqName(event.target.value)} placeholder="例如管理员" /></label></div>}</div><div className={emailChecked ? "channel-card selected" : "channel-card"} onClick={() => setEmailChecked((value) => !value)}><div className="channel-title"><span className="channel-icon">@</span><strong>邮箱</strong><input type="checkbox" checked={emailChecked} onChange={() => setEmailChecked((value) => !value)} onClick={(event) => event.stopPropagation()} /></div>{emailChecked && <div className="channel-fields"><label className="field"><span>邮箱地址</span><input value={emailAddress} onChange={(event) => setEmailAddress(event.target.value)} placeholder="name@example.com" /></label><label className="field"><span>备注</span><input value={emailName} onChange={(event) => setEmailName(event.target.value)} placeholder="例如运营邮箱" /></label></div>}</div></div><div className="wizard-actions"><button className="button primary" onClick={() => setStep(2)} disabled={editingId === null && !qqChecked && !emailChecked}>下一步：选择应用群聊<ChevronRight size={15} /></button></div></> : <><p className="wizard-help">搜索并勾选需要接收提醒的群聊。</p><label className="search-field"><span>⌕</span><input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="搜索群名称或群号" /></label><GroupPicker groups={visibleGroups} selected={selectedGroups} onChange={setSelectedGroups} /><div className="wizard-actions"><button className="button secondary" onClick={() => setStep(1)}>上一步</button><button className="button primary" onClick={() => void save()} disabled={!selectedGroups.length}>保存提醒配置</button></div></>}</section></div>}
+  return <section className="content"><div className="welcome-row"><div><h2>提醒地址</h2><p>这里只管理可选的 QQ 和邮箱地址；关键词触发规则在“关键词”里统一配置。</p></div><div className="row-actions"><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button><button className="button primary" onClick={reset}><Bell size={15} />添加提醒地址</button></div></div>
+    {open && <div className="wizard-overlay"><section className="panel form-panel wizard-card"><div className="wizard-head"><div><div className="panel-kicker">STEP {step} OF 2</div><h3>{editingId === null ? "添加提醒地址" : "编辑提醒地址"}</h3></div><button className="icon-button" onClick={() => setOpen(false)}><X size={16} /></button></div>{step === 1 ? <><p className="wizard-help">QQ 号或邮箱地址可以用逗号、中文逗号、空格或换行输入多个。</p><div className="channel-grid"><div className={qqChecked ? "channel-card selected" : "channel-card"}><div className="channel-title" onClick={() => setQqChecked((value) => !value)}><span className="channel-icon">Q</span><strong>QQ 好友</strong><input type="checkbox" checked={qqChecked} onChange={() => setQqChecked((value) => !value)} onClick={(event) => event.stopPropagation()} /></div>{qqChecked && <div className="channel-fields"><label className="field"><span>QQ 号（可多个）</span><textarea rows={3} value={qqAddress} onChange={(event) => setQqAddress(event.target.value)} placeholder="2890207721, 123456789" /></label><label className="field"><span>备注</span><input value={qqName} onChange={(event) => setQqName(event.target.value)} placeholder="例如管理员" /></label></div>}</div><div className={emailChecked ? "channel-card selected" : "channel-card"}><div className="channel-title" onClick={() => setEmailChecked((value) => !value)}><span className="channel-icon">@</span><strong>邮箱</strong><input type="checkbox" checked={emailChecked} onChange={() => setEmailChecked((value) => !value)} onClick={(event) => event.stopPropagation()} /></div>{emailChecked && <div className="channel-fields"><label className="field"><span>邮箱地址（可多个）</span><textarea rows={3} value={emailAddress} onChange={(event) => setEmailAddress(event.target.value)} placeholder="name@example.com, ops@example.com" /></label><label className="field"><span>备注</span><input value={emailName} onChange={(event) => setEmailName(event.target.value)} placeholder="例如运营邮箱" /></label></div>}</div></div><div className="wizard-actions"><button className="button primary" onClick={() => setStep(2)} disabled={editingId === null && !qqChecked && !emailChecked}>下一步：选择应用群聊<ChevronRight size={15} /></button></div></> : <><p className="wizard-help">搜索并勾选需要接收提醒的群聊。</p><label className="search-field"><span>⌕</span><input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="搜索群名称或群号" /></label><GroupPicker groups={visibleGroups} selected={selectedGroups} onChange={setSelectedGroups} /><div className="wizard-actions"><button className="button secondary" onClick={() => setStep(1)}>上一步</button><button className="button primary" onClick={() => void save()} disabled={!selectedGroups.length}>保存提醒配置</button></div></>}</section></div>}
     <section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">CONFIGURED</div><h3>已配置提醒</h3></div><span className="muted">{items.length} 条</span></div>{items.length === 0 ? <div className="empty-state"><div className="empty-icon"><Bell size={22} /></div><strong>还没有提醒配置</strong><span>添加 QQ 或邮箱后，在这里管理应用群和开关。</span></div> : <div className="reminder-list">{items.map((item) => <div className="reminder-row" key={item.id}><div className="channel-icon">{item.kind === "qq" ? "Q" : "@"}</div><div className="reminder-main"><strong>{item.display_name || (item.kind === "qq" ? "QQ 好友" : "邮箱提醒")}</strong><span>{item.address}</span><small>应用群：{item.group_ids.map((id) => groups.find((group) => group.group_id === id)?.name || id).join("、") || "未绑定"}</small></div><label className="switch"><input type="checkbox" checked={Boolean(item.enabled)} onChange={() => void toggle(item)} /><span /></label><button className="button ghost compact-button" onClick={() => edit(item)}>编辑</button><button className="icon-button danger-button" onClick={() => void remove(item.id)} aria-label="删除提醒"><X size={16} /></button></div>)}</div>}</section>
   </section>;
 }

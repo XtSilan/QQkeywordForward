@@ -135,6 +135,18 @@ class KeywordCreate(BaseModel):
     cooldown_seconds: int = Field(default=60, ge=0, le=86400)
 
 
+class KeywordConfigCreate(BaseModel):
+    keywords: list[str] = Field(min_length=1, max_length=100)
+    group_ids: list[str] = Field(min_length=1)
+    destination_ids: list[int] = Field(default_factory=list)
+    enabled: bool = True
+    cooldown_seconds: int = Field(default=60, ge=0, le=86400)
+
+
+class KeywordNotificationUpdate(BaseModel):
+    destination_ids: list[int] = Field(default_factory=list)
+
+
 class KeywordUpdate(BaseModel):
     display_text: str | None = Field(default=None, min_length=1, max_length=200)
     enabled: bool | None = None
@@ -170,7 +182,7 @@ class NotificationChannelPayload(BaseModel):
 
 
 class NotificationConfigCreate(BaseModel):
-    channels: list[NotificationChannelPayload] = Field(min_length=1, max_length=2)
+    channels: list[NotificationChannelPayload] = Field(min_length=1, max_length=100)
     group_ids: list[str] = Field(min_length=1)
 
 
@@ -417,6 +429,12 @@ def keywords(group_id: str | None = Query(default=None)) -> list[dict[str, Any]]
                 (item["id"],),
             ).fetchall()
             item["bindings"] = [row_dict(binding) for binding in bindings]
+            destinations = conn.execute(
+                "SELECT destination_id FROM keyword_notification_bindings "
+                "WHERE keyword_id=? AND enabled=1 ORDER BY destination_id",
+                (item["id"],),
+            ).fetchall()
+            item["destination_ids"] = [int(destination["destination_id"]) for destination in destinations]
     return result
 
 
@@ -447,6 +465,84 @@ def create_keyword(payload: KeywordCreate) -> dict[str, Any]:
         raise
     revision = bump_config_revision()
     return {"id": keyword_id, "display_text": display_text, "group_ids": group_ids, "revision": revision}
+
+
+@app.post("/api/keyword-configs", dependencies=[Depends(admin_guard)])
+def create_keyword_config(payload: KeywordConfigCreate) -> dict[str, Any]:
+    keywords = list(dict.fromkeys(keyword.strip() for keyword in payload.keywords if keyword.strip()))
+    group_ids = list(dict.fromkeys(group_id.strip() for group_id in payload.group_ids if group_id.strip()))
+    destination_ids = list(dict.fromkeys(int(destination_id) for destination_id in payload.destination_ids))
+    if not keywords:
+        raise HTTPException(status_code=422, detail="at least one keyword is required")
+    if not group_ids:
+        raise HTTPException(status_code=422, detail="at least one group is required")
+    with connection() as conn:
+        if destination_ids:
+            placeholders = ",".join("?" for _ in destination_ids)
+            rows = conn.execute(
+                f"SELECT id, kind FROM notification_destinations WHERE id IN ({placeholders}) AND enabled=1",
+                destination_ids,
+            ).fetchall()
+            if len(rows) != len(destination_ids):
+                raise HTTPException(status_code=422, detail="提醒目标不存在或已关闭")
+            destination_kinds = {str(row["kind"]) for row in rows}
+        else:
+            destination_kinds = set()
+        keyword_ids: list[int] = []
+        try:
+            for display_text in keywords:
+                existing = conn.execute(
+                    "SELECT id FROM keyword_rules WHERE display_text=? AND deleted_at IS NULL",
+                    (display_text,),
+                ).fetchone()
+                if existing:
+                    keyword_id = int(existing["id"])
+                    conn.execute(
+                        "UPDATE keyword_rules SET pattern=?, updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                        (re.escape(display_text), keyword_id),
+                    )
+                else:
+                    cursor = conn.execute(
+                        "INSERT INTO keyword_rules(display_text, pattern, match_mode, ignore_case, updated_at) "
+                        "VALUES (?, ?, 'literal_search', 1, CURRENT_TIMESTAMP)",
+                        (display_text, re.escape(display_text)),
+                    )
+                    keyword_id = int(cursor.lastrowid)
+                keyword_ids.append(keyword_id)
+                for group_id in group_ids:
+                    conn.execute("INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,))
+                    conn.execute(
+                        "INSERT INTO group_keyword_bindings(group_id, keyword_id, enabled, cooldown_seconds) "
+                        "VALUES (?, ?, ?, ?) ON CONFLICT(group_id, keyword_id) DO UPDATE SET "
+                        "enabled=excluded.enabled, cooldown_seconds=excluded.cooldown_seconds, updated_at=CURRENT_TIMESTAMP",
+                        (group_id, keyword_id, int(payload.enabled), payload.cooldown_seconds),
+                    )
+                conn.execute("DELETE FROM keyword_notification_bindings WHERE keyword_id=?", (keyword_id,))
+                for destination_id in destination_ids:
+                    conn.execute(
+                        "INSERT INTO keyword_notification_bindings(keyword_id, destination_id, enabled) VALUES (?, ?, 1)",
+                        (keyword_id, destination_id),
+                    )
+            for group_id in group_ids:
+                conn.execute(
+                    "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
+                    "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET "
+                    "qq_enabled=CASE WHEN ?=1 THEN 1 ELSE group_notification_settings.qq_enabled END, "
+                    "email_enabled=CASE WHEN ?=1 THEN 1 ELSE group_notification_settings.email_enabled END, "
+                    "updated_at=CURRENT_TIMESTAMP",
+                    (
+                        group_id,
+                        int("qq" in destination_kinds),
+                        int("email" in destination_kinds),
+                        int("qq" in destination_kinds),
+                        int("email" in destination_kinds),
+                    ),
+                )
+        except Exception as exc:
+            if "UNIQUE constraint failed" in str(exc):
+                raise HTTPException(status_code=409, detail="keyword already exists") from exc
+            raise
+    return {"keyword_ids": keyword_ids, "group_ids": group_ids, "destination_ids": destination_ids, "revision": bump_config_revision()}
 
 
 @app.patch("/api/keywords/{keyword_id}", dependencies=[Depends(admin_guard)])
@@ -493,6 +589,58 @@ def update_keyword(keyword_id: int, payload: KeywordUpdate) -> dict[str, Any]:
             )
         conn.execute("UPDATE keyword_rules SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (keyword_id,))
     return {"updated": True, "revision": bump_config_revision()}
+
+
+@app.put("/api/keywords/{keyword_id}/notifications", dependencies=[Depends(admin_guard)])
+def update_keyword_notifications(keyword_id: int, payload: KeywordNotificationUpdate) -> dict[str, Any]:
+    destination_ids = list(dict.fromkeys(int(destination_id) for destination_id in payload.destination_ids))
+    with connection() as conn:
+        exists = conn.execute(
+            "SELECT id FROM keyword_rules WHERE id=? AND deleted_at IS NULL", (keyword_id,)
+        ).fetchone()
+        if not exists:
+            raise HTTPException(status_code=404, detail="keyword not found")
+        destination_kinds: set[str] = set()
+        if destination_ids:
+            placeholders = ",".join("?" for _ in destination_ids)
+            rows = conn.execute(
+                f"SELECT id, kind FROM notification_destinations WHERE id IN ({placeholders}) AND enabled=1",
+                destination_ids,
+            ).fetchall()
+            if len(rows) != len(destination_ids):
+                raise HTTPException(status_code=422, detail="提醒目标不存在或已关闭")
+            destination_kinds = {str(row["kind"]) for row in rows}
+        groups = [
+            str(row["group_id"])
+            for row in conn.execute(
+                "SELECT group_id FROM group_keyword_bindings WHERE keyword_id=?", (keyword_id,)
+            ).fetchall()
+        ]
+        conn.execute("DELETE FROM keyword_notification_bindings WHERE keyword_id=?", (keyword_id,))
+        for destination_id in destination_ids:
+            conn.execute(
+                "INSERT INTO keyword_notification_bindings(keyword_id, destination_id, enabled) VALUES (?, ?, 1)",
+                (keyword_id, destination_id),
+            )
+        for group_id in groups:
+            conn.execute(
+                "INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,)
+            )
+            conn.execute(
+                "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET "
+                "qq_enabled=CASE WHEN ?=1 THEN 1 ELSE group_notification_settings.qq_enabled END, "
+                "email_enabled=CASE WHEN ?=1 THEN 1 ELSE group_notification_settings.email_enabled END, "
+                "updated_at=CURRENT_TIMESTAMP",
+                (
+                    group_id,
+                    int("qq" in destination_kinds),
+                    int("email" in destination_kinds),
+                    int("qq" in destination_kinds),
+                    int("email" in destination_kinds),
+                ),
+            )
+    return {"updated": True, "destination_ids": destination_ids, "revision": bump_config_revision()}
 
 
 @app.delete("/api/keywords/{keyword_id}", dependencies=[Depends(admin_guard)])
@@ -739,6 +887,7 @@ def delete_destination(destination_id: int) -> dict[str, Any]:
         # Remove dependent queue records explicitly because the existing
         # SQLite schema intentionally keeps foreign-key enforcement enabled.
         conn.execute("DELETE FROM notification_jobs WHERE destination_id=?", (destination_id,))
+        conn.execute("DELETE FROM keyword_notification_bindings WHERE destination_id=?", (destination_id,))
         conn.execute("DELETE FROM notification_destination_bindings WHERE destination_id=?", (destination_id,))
         cursor = conn.execute("DELETE FROM notification_destinations WHERE id=?", (destination_id,))
         if cursor.rowcount == 0:

@@ -93,6 +93,13 @@ CREATE TABLE IF NOT EXISTS notification_destination_bindings (
   PRIMARY KEY(group_id, destination_id)
 );
 
+CREATE TABLE IF NOT EXISTS keyword_notification_bindings (
+  keyword_id INTEGER NOT NULL REFERENCES keyword_rules(id),
+  destination_id INTEGER NOT NULL REFERENCES notification_destinations(id),
+  enabled INTEGER NOT NULL DEFAULT 1,
+  PRIMARY KEY(keyword_id, destination_id)
+);
+
 CREATE TABLE IF NOT EXISTS broadcast_tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
