@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request, Response, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, PlainTextResponse, JSONResponse
@@ -292,6 +292,24 @@ def audit_logs(limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, 
 @app.get("/api/health")
 def health() -> dict[str, Any]:
     return {"ok": True, "revision": config_revision()}
+
+
+@app.post("/api/uploads/image", dependencies=[Depends(admin_guard)])
+async def upload_image(file: UploadFile = File(...), settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    allowed = {"image/jpeg": ".jpg", "image/png": ".png", "image/gif": ".gif", "image/webp": ".webp"}
+    suffix = allowed.get(file.content_type or "")
+    if not suffix:
+        raise HTTPException(status_code=415, detail="只支持 JPG、PNG、GIF、WEBP 图片")
+    limit = settings.max_upload_size_mb * 1024 * 1024
+    data = await file.read(limit + 1)
+    if len(data) > limit:
+        raise HTTPException(status_code=413, detail=f"图片不能超过 {settings.max_upload_size_mb}MB")
+    upload_dir = Path(settings.upload_dir)
+    upload_dir.mkdir(parents=True, exist_ok=True)
+    filename = f"{uuid.uuid4().hex}{suffix}"
+    (upload_dir / filename).write_bytes(data)
+    url = settings.public_base_url.rstrip("/") + "/media/" + filename
+    return {"url": url, "segment": {"type": "image", "data": {"file": url}}}
 
 
 @app.get("/api/dashboard", dependencies=[Depends(admin_guard)])
@@ -739,6 +757,9 @@ async def service_logs(
 
 
 frontend = Path(__file__).resolve().parent.parent / "web" / "dist"
+upload_path = Path(get_settings().upload_dir)
+upload_path.mkdir(parents=True, exist_ok=True)
+app.mount("/media", StaticFiles(directory=upload_path), name="media")
 if frontend.exists():
     app.mount("/assets", StaticFiles(directory=frontend / "assets"), name="assets")
 
