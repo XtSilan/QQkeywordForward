@@ -196,6 +196,33 @@ NoneBot 会读取 `.env` 和 `.env.{ENVIRONMENT}`；本示例设置 `ENVIRONMENT
 
 本项目的 `.env.prod` 还包含 `NAPCAT_WEBUI_TOKEN`。它对应 NapCat `data/napcat/webui.json` 的 WebUI token，仅供 WebUI 后端换取短期 Credential；不要把它写进前端或提交 Git。NoneBot 的反向 WebSocket 入口是 `ws://nonebot:8081/onebot/v11/ws`，NapCat 登录后应在 OneBot 配置中指向该地址；鉴权变量使用 NoneBot OneBot V11 适配器识别的 `ONEBOT_V11_ACCESS_TOKEN`（以及可选的 `ONEBOT_V11_SECRET`）。
 
+### 当前 WebUI 新增配置
+
+在 `.env.prod` 中按需加入以下变量（SMTP 密码、管理员 token 和 NapCat token 仅放在服务器）：
+
+```dotenv
+APP_ENV=prod
+ADMIN_TOKEN=请替换为高强度随机值
+AUTH_SESSION_SECRET=请替换为另一组高强度随机值
+AUTH_SESSION_TTL=86400
+SMTP_HOST=smtp.example.com
+SMTP_PORT=587
+SMTP_USERNAME=机器人邮箱账号
+SMTP_PASSWORD=机器人邮箱密码
+SMTP_FROM=bot@example.com
+SMTP_STARTTLS=true
+SMTP_SSL=false
+SMTP_TIMEOUT=15
+PUBLIC_BASE_URL=http://你的域名或宿主机IP:8080
+MAX_UPLOAD_SIZE_MB=10
+```
+
+SMTP 也可以在 WebUI“系统设置”接口中保存到 SQLite 的 `app_meta`（密码不会返回前端）。命中邮件由 NoneBot 调度器通过标准库 `smtplib` 实际投递，失败会进入重试队列。图片上传接口为 `POST /api/uploads/image`，只接受 JPEG/PNG/GIF/WEBP，文件存放在挂载的 `data/nonebot/uploads`，群发消息使用返回的 HTTPS/HTTP URL 图片段。
+
+管理员生产登录流程为 `POST /api/auth/login`，成功后返回 HttpOnly `qq_bot_session` Cookie；浏览器页面自动携带 Cookie，命令行和运维脚本仍可使用 `Authorization: Bearer $ADMIN_TOKEN`。所有 `/api` 写操作会写入 SQLite `audit_logs`，通过 `GET /api/audit-logs` 查询；审计不会保存 token、密码或消息正文。
+
+NapCat OneBot 反向客户端可在 WebUI 中通过 `GET/PUT /api/settings/onebot` 配置。后端调用 NapCat 官方 WebUI 路由 `/api/OB11Config/GetConfig` 和 `/api/OB11Config/SetConfig`，只修改 `network.websocketClients` 的连接地址、启用状态、重连/心跳间隔、证书校验和 token。保存后按 NapCat 版本提示重启服务。群列表不依赖 NapCat 私有群列表页面，NoneBot 每 5 分钟调用 OneBot `get_group_list` 自动同步到 SQLite；群发和关键词页面直接读取 `/api/groups`。
+
 建议：
 
 ```bash
