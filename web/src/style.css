@@ -127,12 +127,29 @@ td small { margin-top: 3px; color: #9aa4b2; font-size: 10px; }
 .keyword-tag { display: inline-block; padding: 4px 7px; border-radius: 4px; color: #456b9c; background: #edf4fd; font-size: 11px; }
 .message-cell { max-width: 320px; overflow: hidden; color: #59697d; text-overflow: ellipsis; white-space: nowrap; }
 .nowrap { white-space: nowrap; }
+.napcat-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .8fr); gap: 14px; }
+.qr-panel, .napcat-info-panel, .logs-panel { padding: 20px; }
+.qr-content { display: grid; justify-items: center; gap: 10px; padding: 6px 0 14px; }
+.qr-placeholder { width: 240px; height: 240px; display: grid; place-items: center; border: 1px solid #e1e7ef; border-radius: 8px; background: #fff; }
+.qr-placeholder img { width: 220px; height: 220px; image-rendering: pixelated; }
+.qr-content code { max-width: 100%; overflow: hidden; color: #53709a; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
+.qr-content > span { color: #8c98a7; font-size: 11px; }
+.full-button { width: 100%; }
+.info-list { display: grid; border-top: 1px solid #edf0f4; }
+.info-row { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: 14px; border-bottom: 1px solid #edf0f4; color: #8894a3; font-size: 12px; }
+.info-row strong { color: #435268; font-size: 12px; font-weight: 600; text-align: right; }
+.napcat-info-panel .callout { margin: 16px 0 12px; }
+.log-tabs { display: flex; gap: 5px; border-bottom: 1px solid #e8edf3; }
+.log-tab { padding: 8px 12px; color: #8491a1; border: 0; border-bottom: 2px solid transparent; background: transparent; font-size: 12px; cursor: pointer; }
+.log-tab.active { color: #2f66ae; border-bottom-color: #3e7bc7; font-weight: 600; }
+.log-output { min-height: 460px; max-height: 620px; overflow: auto; margin: 0; padding: 16px 0 0; color: #536276; font: 11px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; white-space: pre-wrap; word-break: break-word; }
 
 @media (max-width: 960px) {
   .stat-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .dashboard-grid { grid-template-columns: 1fr; }
   .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .keyword-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .napcat-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 700px) {
   .sidebar { position: fixed; z-index: 20; top: 0; bottom: 0; left: 0; transform: translateX(-102%); transition: transform .2s ease; box-shadow: 8px 0 25px rgba(15, 23, 42, .18); }

@@ -1,5 +1,6 @@
 import { StrictMode, useEffect, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+import QRCode from "qrcode";
 import {
   Activity, Bell, Bot, CheckCircle2, ChevronRight, CircleAlert, FileText,
   KeyRound, LayoutDashboard, Menu, MessageSquareText, RefreshCw, RotateCcw,
@@ -9,7 +10,7 @@ import "./style.css";
 
 type Dashboard = {
   config_revision: number;
-  napcat: { ok?: boolean; isLogin?: boolean; coreReady?: boolean; loginPhase?: string; error?: string };
+  napcat: { ok?: boolean; isLogin?: boolean; coreReady?: boolean; loginPhase?: string; loginError?: string; error?: string };
   nonebot: { service: string; config_reload: boolean };
   stats?: { groups: number; keyword_hits_today: number };
 };
@@ -122,7 +123,9 @@ function App() {
         {active === "Dashboard" && <DashboardPage dashboard={dashboard} action={action} restart={restart} />}
         {active === "关键词" && <KeywordPage onError={setError} />}
         {active === "历史记录" && <HistoryPage onError={setError} />}
-        {!(["Dashboard", "关键词", "历史记录"] as string[]).includes(active) && <PlaceholderPage active={active} />}
+        {active === "登录与 NapCat" && <NapCatPage onError={setError} />}
+        {active === "运行日志" && <LogsPage onError={setError} />}
+        {!(["Dashboard", "关键词", "历史记录", "登录与 NapCat", "运行日志"] as string[]).includes(active) && <PlaceholderPage active={active} />}
       </main>
     </div>
   );
@@ -250,6 +253,58 @@ function HistoryPage({ onError }: { onError: (message: string) => void }) {
       {items.length === 0 ? <div className="empty-state"><div className="empty-icon"><FileText size={22} /></div><strong>暂无命中记录</strong><span>机器人识别到关键词后会显示在这里。</span></div> : <div className="table-wrap"><table><thead><tr><th>时间</th><th>群聊</th><th>发送者</th><th>命中</th><th>消息</th></tr></thead><tbody>{items.map((item) => <tr key={item.id}><td className="nowrap">{new Date(item.hit_at).toLocaleString("zh-CN", { hour12: false })}</td><td><strong>{item.group_name || "未命名群"}</strong><small>{item.group_id}</small></td><td>{item.sender_name || "未知"}<small>{item.sender_id}</small></td><td><span className="keyword-tag">{item.keyword_text_snapshot}</span></td><td className="message-cell">{item.message_text || "（非文本消息）"}</td></tr>)}</tbody></table></div>}
     </section>
   </section>;
+}
+
+function NapCatPage({ onError }: { onError: (message: string) => void }) {
+  const [status, setStatus] = useState<Dashboard["napcat"] | null>(null);
+  const [qr, setQr] = useState("");
+  const [qrImage, setQrImage] = useState("");
+  const [busy, setBusy] = useState("");
+  const load = async () => {
+    try { setStatus(await apiJson<Dashboard["napcat"]>("/api/ops/napcat/login")); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : "NapCat 状态读取失败"); }
+  };
+  useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 2000); return () => window.clearInterval(timer); }, []);
+  useEffect(() => { if (!qr) { setQrImage(""); return; } void QRCode.toDataURL(qr, { width: 220, margin: 2 }).then(setQrImage).catch(() => setQrImage("")); }, [qr]);
+  const getQr = async () => {
+    setBusy("qr");
+    try { const data = await apiJson<{ qrcode?: string; qrcodeurl?: string }>("/api/ops/napcat/qrcode", { method: "POST" }); setQr(data.qrcode || data.qrcodeurl || ""); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : "二维码获取失败"); }
+    finally { setBusy(""); }
+  };
+  const refreshQr = async () => {
+    setBusy("refresh");
+    try { const data = await apiJson<{ qrcode?: string; qrcodeurl?: string }>("/api/ops/napcat/qrcode/refresh", { method: "POST" }); setQr(data.qrcode || data.qrcodeurl || ""); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : "二维码刷新失败"); }
+    finally { setBusy(""); }
+  };
+  const restart = async () => {
+    setBusy("restart");
+    try { await apiJson("/api/ops/napcat/restart", { method: "POST" }); await load(); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : "NapCat 重启失败"); }
+    finally { setBusy(""); }
+  };
+  const online = Boolean(status?.isLogin || status?.coreReady);
+  return <section className="content">
+    <div className="welcome-row"><div><h2>登录与 NapCat</h2><p>二维码和登录状态由后端安全代理，不把 NapCat 凭据暴露给浏览器。</p></div><div className={online ? "status-chip good" : "status-chip warn"}><StatusDot online={online} />{online ? "QQ 已登录" : status?.loginPhase || "等待状态"}</div></div>
+    <div className="napcat-grid"><section className="panel qr-panel"><div className="panel-heading"><div><div className="panel-kicker">QR LOGIN</div><h3>扫码登录</h3></div><button className="button secondary" onClick={() => void refreshQr()} disabled={busy !== ""}><RefreshCw size={15} />刷新</button></div>
+      {qr ? <div className="qr-content"><div className="qr-placeholder">{qrImage ? <img src={qrImage} alt="NapCat 登录二维码" /> : <span>二维码生成中</span>}</div><code>{qr}</code><span>请使用手机 QQ 扫描二维码并授权。</span></div> : <div className="empty-state"><div className="empty-icon"><ShieldCheck size={22} /></div><strong>尚未获取二维码</strong><span>点击下方按钮从 NapCat 获取最新二维码。</span></div>}
+      {!qr && <button className="button primary full-button" onClick={() => void getQr()} disabled={busy !== ""}><ShieldCheck size={15} />{busy === "qr" ? "获取中" : "获取二维码"}</button>}
+    </section><section className="panel napcat-info-panel"><div className="panel-heading"><div><div className="panel-kicker">NAPCAT STATUS</div><h3>运行状态</h3></div><span className="muted">2 秒刷新</span></div><div className="info-list"><InfoRow label="登录状态" value={status?.isLogin ? "已登录" : "未登录"} good={Boolean(status?.isLogin)} /><InfoRow label="核心状态" value={status?.coreReady ? "已就绪" : "等待中"} good={Boolean(status?.coreReady)} /><InfoRow label="登录阶段" value={status?.loginPhase || "-"} /><InfoRow label="登录错误" value={status?.loginError || "无"} /></div><div className="callout"><ShieldCheck size={17} /><span>二维码过期时点击刷新。修改 NapCat 或 OneBot 配置后，再使用重启按钮应用。</span></div><button className="button ghost full-button" onClick={() => void restart()} disabled={busy !== ""}><RotateCcw size={15} />{busy === "restart" ? "重启中" : "重启 NapCat"}</button></section></div>
+  </section>;
+}
+
+function InfoRow({ label, value, good }: { label: string; value: string; good?: boolean }) { return <div className="info-row"><span>{label}</span><strong className={good ? "online-text" : ""}>{value}</strong></div>; }
+
+function LogsPage({ onError }: { onError: (message: string) => void }) {
+  const [service, setService] = useState<"nonebot" | "napcat">("nonebot");
+  const [logs, setLogs] = useState("正在加载日志...");
+  const load = async () => {
+    try { const response = await fetch(`/api/ops/logs/${service}?tail=200`); if (!response.ok) throw new Error("日志读取失败"); setLogs(await response.text()); }
+    catch (reason) { onError(reason instanceof Error ? reason.message : "日志读取失败"); }
+  };
+  useEffect(() => { void load(); const timer = window.setInterval(() => void load(), 5000); return () => window.clearInterval(timer); }, [service]);
+  return <section className="content"><div className="welcome-row"><div><h2>运行日志</h2><p>查看 NoneBot 和 NapCat 最近输出，日志来源由后端控制。</p></div><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button></div><section className="panel logs-panel"><div className="log-tabs"><button className={service === "nonebot" ? "log-tab active" : "log-tab"} onClick={() => setService("nonebot")}>NoneBot</button><button className={service === "napcat" ? "log-tab active" : "log-tab"} onClick={() => setService("napcat")}>NapCat</button></div><pre className="log-output">{logs}</pre></section></section>;
 }
 
 function PlaceholderPage({ active }: { active: string }) {
