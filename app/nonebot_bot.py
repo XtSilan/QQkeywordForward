@@ -1,6 +1,8 @@
 import json
 import re
 import asyncio
+import smtplib
+from email.message import EmailMessage
 from collections import deque
 from datetime import datetime, timezone
 
@@ -15,6 +17,56 @@ from app.settings import get_settings
 _scheduler_task: asyncio.Task | None = None
 _stop_scheduler = asyncio.Event()
 _send_times: deque[float] = deque()
+
+
+def _smtp_send(settings, recipient: str, subject: str, body: str) -> None:
+    config = _smtp_config(settings)
+    if not config["host"] or not config["from_address"]:
+        raise RuntimeError("SMTP_HOST 和 SMTP_FROM 未配置")
+    message = EmailMessage()
+    message["From"] = config["from_address"]
+    message["To"] = recipient
+    message["Subject"] = subject
+    message.set_content(body)
+    smtp_class = smtplib.SMTP_SSL if config["ssl"] else smtplib.SMTP
+    with smtp_class(config["host"], config["port"], timeout=config["timeout"]) as server:
+        server.ehlo()
+        if config["starttls"] and not config["ssl"]:
+            server.starttls()
+            server.ehlo()
+        if config["username"]:
+            server.login(config["username"], config["password"])
+        server.send_message(message)
+
+
+def _smtp_config(settings) -> dict[str, object]:
+    values = {
+        "host": settings.smtp_host, "port": settings.smtp_port, "username": settings.smtp_username,
+        "password": settings.smtp_password, "from_address": settings.smtp_from,
+        "starttls": settings.smtp_starttls, "ssl": settings.smtp_ssl, "timeout": settings.smtp_timeout,
+    }
+    try:
+        with connection() as conn:
+            rows = conn.execute("SELECT key, value FROM app_meta WHERE key LIKE 'smtp_%'").fetchall()
+        mapping = {row["key"]: row["value"] for row in rows}
+        for key, value in mapping.items():
+            short = key.removeprefix("smtp_")
+            if short in values:
+                if short in {"port", "timeout"}:
+                    values[short] = int(value)
+                elif short in {"starttls", "ssl"}:
+                    values[short] = value.lower() == "true"
+                elif short == "from":
+                    values["from_address"] = value
+                else:
+                    values[short] = value
+    except Exception:
+        pass
+    return values
+
+
+async def send_smtp_email(settings, recipient: str, subject: str, body: str) -> None:
+    await asyncio.to_thread(_smtp_send, settings, recipient, subject, body)
 
 
 def message_text(message: Message) -> str:
@@ -141,15 +193,18 @@ async def _dispatch_notifications(bot: Bot) -> None:
         if not job:
             return
         conn.execute("UPDATE notification_jobs SET status='sending', attempts=attempts+1 WHERE id=?", (job["id"],))
-    if job["kind"] != "qq":
-        with connection() as conn:
-            conn.execute("UPDATE notification_jobs SET status='failed', last_error=? WHERE id=?", ("email sender not configured", job["id"]))
-        return
     message = [
         {"type": "text", "data": {"text": f"[关键词命中]\n群：{job['group_name']}（{job['group_id']}）\n发送者：{job['sender_name']}（{job['sender_id']}）\n命中：{job['keyword_text_snapshot']}\n时间：{job['hit_at']}\n消息：{job['message_text']}"}}
     ]
     try:
-        await bot.call_api("send_private_msg", user_id=int(job["address"]), message=message)
+        if job["kind"] == "qq":
+            await bot.call_api("send_private_msg", user_id=int(job["address"]), message=message)
+        else:
+            await send_smtp_email(
+                get_settings(), job["address"],
+                f"关键词命中：{job['keyword_text_snapshot']}",
+                message[0]["data"]["text"],
+            )
     except Exception as exc:
         with connection() as conn:
             conn.execute("UPDATE notification_jobs SET status='pending', last_error=?, next_attempt_at=datetime('now', '+60 seconds') WHERE id=?", (str(exc)[:500], job["id"]))

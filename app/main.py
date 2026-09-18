@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query
+from fastapi import Body, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 from fastapi.responses import FileResponse, PlainTextResponse
@@ -25,6 +25,25 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def audit_mutations(request: Request, call_next):
+    response = await call_next(request)
+    if request.method in {"POST", "PUT", "PATCH", "DELETE"} and request.url.path.startswith("/api/"):
+        authorization = request.headers.get("authorization", "")
+        actor = "bearer" if authorization.startswith("Bearer ") else "session"
+        resource = request.url.path.rstrip("/").split("/")[-1] or "root"
+        try:
+            with connection() as conn:
+                conn.execute(
+                    "INSERT INTO audit_logs(actor, action, resource_type, resource_id, detail_json, status_code) "
+                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    (actor, request.method, request.url.path, resource, json.dumps({"path": request.url.path}), response.status_code),
+                )
+        except Exception:
+            pass
+    return response
 
 
 @app.on_event("startup")
@@ -93,8 +112,80 @@ class BroadcastTaskCreate(BaseModel):
     group_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
 
 
+class SmtpSettingsPayload(BaseModel):
+    host: str = Field(default="", max_length=255)
+    port: int = Field(default=587, ge=1, le=65535)
+    username: str = Field(default="", max_length=320)
+    password: str = Field(default="", max_length=500)
+    from_address: str = Field(default="", max_length=320)
+    starttls: bool = True
+    ssl: bool = False
+    timeout: int = Field(default=15, ge=1, le=120)
+
+
 def row_dict(row: Any) -> dict[str, Any]:
     return dict(row)
+
+
+@app.get("/api/settings/smtp", dependencies=[Depends(admin_guard)])
+def get_smtp_settings(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    with connection() as conn:
+        overrides = {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM app_meta WHERE key LIKE 'smtp_%'")}
+    return {
+        "host": overrides.get("smtp_host", settings.smtp_host),
+        "port": int(overrides.get("smtp_port", settings.smtp_port)),
+        "username": overrides.get("smtp_username", settings.smtp_username),
+        "from_address": overrides.get("smtp_from", settings.smtp_from),
+        "starttls": overrides.get("smtp_starttls", str(settings.smtp_starttls)).lower() == "true",
+        "ssl": overrides.get("smtp_ssl", str(settings.smtp_ssl)).lower() == "true",
+        "timeout": int(overrides.get("smtp_timeout", settings.smtp_timeout)),
+        "password_configured": bool(overrides.get("smtp_password", settings.smtp_password)),
+    }
+
+
+@app.put("/api/settings/smtp", dependencies=[Depends(admin_guard)])
+def put_smtp_settings(payload: SmtpSettingsPayload) -> dict[str, Any]:
+    values = {
+        "smtp_host": payload.host.strip(), "smtp_port": str(payload.port),
+        "smtp_username": payload.username.strip(), "smtp_from": payload.from_address.strip(),
+        "smtp_starttls": str(payload.starttls), "smtp_ssl": str(payload.ssl),
+        "smtp_timeout": str(payload.timeout),
+    }
+    if payload.password:
+        values["smtp_password"] = payload.password
+    with connection() as conn:
+        for key, value in values.items():
+            conn.execute(
+                "INSERT INTO app_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+    return {"saved": True, "password_configured": bool(payload.password), "revision": bump_config_revision()}
+
+
+@app.post("/api/notifications/test", dependencies=[Depends(admin_guard)])
+async def test_notification_email(
+    payload: dict[str, str] = Body(...), settings: Settings = Depends(get_settings)
+) -> dict[str, Any]:
+    from app.nonebot_bot import send_smtp_email
+
+    address = str(payload.get("address", "")).strip()
+    if "@" not in address:
+        raise HTTPException(status_code=422, detail="invalid email address")
+    try:
+        await send_smtp_email(settings, address, "QQ Bot SMTP 测试", "这是一封来自 QQ Bot WebUI 的测试邮件。")
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"SMTP 发送失败: {exc}") from exc
+    return {"sent": True}
+
+
+@app.get("/api/audit-logs", dependencies=[Depends(admin_guard)])
+def audit_logs(limit: int = Query(default=100, ge=1, le=500)) -> list[dict[str, Any]]:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT id, actor, action, resource_type, resource_id, detail_json, status_code, created_at "
+            "FROM audit_logs ORDER BY id DESC LIMIT ?", (limit,)
+        ).fetchall()
+    return [row_dict(row) for row in rows]
 
 
 @app.get("/api/health")

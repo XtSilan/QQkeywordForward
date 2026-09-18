@@ -23,6 +23,19 @@ class Settings(BaseSettings):
     driver: str = "~fastapi"
     onebot_access_token: str = ""
     onebot_ws_url: str = "ws://napcat:3001"
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from: str = ""
+    smtp_starttls: bool = True
+    smtp_ssl: bool = False
+    smtp_timeout: int = 15
+    auth_session_secret: str = "change-me-session-secret"
+    auth_session_ttl: int = 86400
+    upload_dir: str = "/app/data/nonebot/uploads"
+    public_base_url: str = "http://localhost:8080"
+    max_upload_size_mb: int = 10
 
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.prod"),
