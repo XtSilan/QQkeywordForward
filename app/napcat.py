@@ -1,5 +1,7 @@
 import hashlib
 import json
+import asyncio
+import time
 from typing import Any
 
 import httpx
@@ -8,6 +10,10 @@ from app.settings import Settings
 
 
 class NapCatClient:
+    _shared_credential = ""
+    _shared_credential_at = 0.0
+    _auth_lock: asyncio.Lock | None = None
+
     def __init__(self, settings: Settings):
         self.settings = settings
         self._session_credential = ""
@@ -23,21 +29,37 @@ class NapCatClient:
             return self._session_credential
         if self.settings.napcat_webui_credential:
             return self.settings.napcat_webui_credential
+        if self.__class__._shared_credential and time.monotonic() - self.__class__._shared_credential_at < 300:
+            self._session_credential = self.__class__._shared_credential
+            return self._session_credential
         if not self.settings.napcat_webui_token:
             return ""
-        digest = hashlib.sha256(
-            f"{self.settings.napcat_webui_token}.napcat".encode("utf-8")
-        ).hexdigest()
-        url = self.settings.napcat_webui_url.rstrip("/") + "/api/auth/login"
-        async with httpx.AsyncClient(timeout=15) as client:
-            response = await client.post(url, json={"hash": digest})
-        response.raise_for_status()
-        payload = response.json()
-        credential = payload.get("data", {}).get("Credential", "")
-        if not credential:
-            raise RuntimeError(payload.get("message", "NapCat authentication failed"))
-        self._session_credential = credential
-        return credential
+        if self.__class__._auth_lock is None:
+            self.__class__._auth_lock = asyncio.Lock()
+        async with self.__class__._auth_lock:
+            if self.__class__._shared_credential and time.monotonic() - self.__class__._shared_credential_at < 300:
+                self._session_credential = self.__class__._shared_credential
+                return self._session_credential
+            digest = hashlib.sha256(
+                f"{self.settings.napcat_webui_token}.napcat".encode("utf-8")
+            ).hexdigest()
+            url = self.settings.napcat_webui_url.rstrip("/") + "/api/auth/login"
+            async with httpx.AsyncClient(timeout=15) as client:
+                response = await client.post(url, json={"hash": digest})
+            response.raise_for_status()
+            payload = response.json()
+            credential = payload.get("data", {}).get("Credential", "")
+            if not credential:
+                raise RuntimeError(payload.get("message", "NapCat authentication failed"))
+            self._session_credential = credential
+            self.__class__._shared_credential = credential
+            self.__class__._shared_credential_at = time.monotonic()
+            return credential
+
+    @classmethod
+    def _clear_shared_credential(cls) -> None:
+        cls._shared_credential = ""
+        cls._shared_credential_at = 0.0
 
     async def request(self, method: str, path: str, **kwargs: Any) -> Any:
         url = self.settings.napcat_webui_url.rstrip("/") + path
@@ -53,6 +75,17 @@ class NapCatClient:
                 response = await client.request(method, url, headers=headers, **kwargs)
         response.raise_for_status()
         payload = response.json()
+        if isinstance(payload, dict) and payload.get("code") not in (None, 0):
+            message = str(payload.get("message", ""))
+            if message.lower() in {"unauthorized", "token is invalid", "credential is invalid"}:
+                self._session_credential = ""
+                self.__class__._clear_shared_credential()
+                credential = await self.authenticate()
+                headers = {**self._headers(credential), **kwargs.pop("headers", {})}
+                async with httpx.AsyncClient(timeout=15) as client:
+                    response = await client.request(method, url, headers=headers, **kwargs)
+                response.raise_for_status()
+                payload = response.json()
         if isinstance(payload, dict) and payload.get("code") not in (None, 0):
             raise RuntimeError(payload.get("message", "NapCat API request failed"))
         return payload.get("data", payload) if isinstance(payload, dict) else payload
