@@ -381,6 +381,7 @@ async def _dispatch_notifications(bot: Bot) -> None:
     with connection() as conn:
         job = conn.execute(
             "SELECT j.id, j.hit_id, d.kind, d.address, "
+            "h.sender_name, h.sender_id, "
             "h.keyword_text_snapshot, h.message_text "
             "FROM notification_jobs j JOIN notification_destinations d ON d.id=j.destination_id "
             "JOIN keyword_hits h ON h.id=j.hit_id WHERE j.status='pending' "
@@ -390,7 +391,7 @@ async def _dispatch_notifications(bot: Bot) -> None:
             return
         conn.execute("UPDATE notification_jobs SET status='sending', attempts=attempts+1 WHERE id=?", (job["id"],))
     message = [
-        {"type": "text", "data": {"text": f"关键词：{job['keyword_text_snapshot']}\n消息内容：{job['message_text']}"}}
+        {"type": "text", "data": {"text": f"发送者：{job['sender_name']}（{job['sender_id']}）\n关键词：{job['keyword_text_snapshot']}\n消息内容：{job['message_text']}"}}
     ]
     try:
         if job["kind"] == "qq":
