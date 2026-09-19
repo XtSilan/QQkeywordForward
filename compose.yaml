@@ -72,7 +72,7 @@ services:
       - ./data/logs/nonebot:/app/data/logs/nonebot
       - ./.env.prod:/app/.env.prod:ro
     ports:
-      - "18081:8081"
+      - "8081:8081"
     depends_on:
       napcat:
         condition: service_started
