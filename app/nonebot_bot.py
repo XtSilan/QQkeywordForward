@@ -162,7 +162,34 @@ def _prune_duplicate_state(conn, now: float, cooldown_seconds: int) -> None:
         "DELETE FROM keyword_message_cooldowns WHERE last_seen_at < ?",
         (now - cooldown_seconds,),
     )
+    conn.execute(
+        "DELETE FROM sender_message_cooldowns WHERE cooldown_until <= ?", (now,)
+    )
     _cooldown_cleanup_at = now
+
+
+def _sender_is_cooling(conn, sender_id: str, now: float) -> bool:
+    row = conn.execute(
+        "SELECT cooldown_until FROM sender_message_cooldowns WHERE sender_id=?",
+        (sender_id,),
+    ).fetchone()
+    if not row:
+        return False
+    if float(row["cooldown_until"]) > now:
+        return True
+    conn.execute("DELETE FROM sender_message_cooldowns WHERE sender_id=?", (sender_id,))
+    return False
+
+
+def _cooldown_sender(
+    conn, sender_id: str, now: float, cooldown_seconds: int
+) -> None:
+    conn.execute(
+        "INSERT INTO sender_message_cooldowns(sender_id, triggered_at, cooldown_until) "
+        "VALUES (?, ?, ?) ON CONFLICT(sender_id) DO UPDATE SET "
+        "triggered_at=excluded.triggered_at, cooldown_until=excluded.cooldown_until",
+        (sender_id, now, now + cooldown_seconds),
+    )
 
 
 def run() -> None:
@@ -227,6 +254,15 @@ def run() -> None:
             _prune_duplicate_state(
                 conn, now.timestamp(), duplicate_cooldown_seconds
             )
+            sender_id = str(event.user_id)
+            if _sender_is_cooling(conn, sender_id, now.timestamp()):
+                nonebot.logger.info(
+                    "sender_cooldown_suppressed group_id=%s user_id=%s message_id=%s",
+                    event.group_id,
+                    event.user_id,
+                    event.message_id,
+                )
+                return
             if _should_suppress_duplicate(
                 conn,
                 text,
@@ -234,6 +270,12 @@ def run() -> None:
                 duplicate_cooldown_seconds,
                 now.timestamp(),
             ):
+                _cooldown_sender(
+                    conn,
+                    sender_id,
+                    now.timestamp(),
+                    duplicate_cooldown_seconds,
+                )
                 nonebot.logger.info(
                     "duplicate_message_suppressed group_id=%s user_id=%s message_id=%s",
                     event.group_id,
@@ -252,7 +294,7 @@ def run() -> None:
                 (
                     str(event.group_id),
                     matched_rows[0]["name"],
-                    str(event.user_id),
+                    sender_id,
                     event.sender.card or event.sender.nickname or "",
                     matched_rows[0]["id"],
                     "、".join(matched_keywords),

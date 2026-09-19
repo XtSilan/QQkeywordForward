@@ -113,6 +113,15 @@ CREATE INDEX IF NOT EXISTS idx_keyword_message_cooldowns_until
 CREATE INDEX IF NOT EXISTS idx_keyword_message_cooldowns_seen
   ON keyword_message_cooldowns(last_seen_at);
 
+CREATE TABLE IF NOT EXISTS sender_message_cooldowns (
+  sender_id TEXT PRIMARY KEY,
+  triggered_at REAL NOT NULL,
+  cooldown_until REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_sender_message_cooldowns_until
+  ON sender_message_cooldowns(cooldown_until);
+
 CREATE TABLE IF NOT EXISTS broadcast_tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
