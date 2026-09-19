@@ -3,6 +3,7 @@ import hashlib
 import json
 import re
 import smtplib
+import unicodedata
 from email.message import EmailMessage
 from collections import deque
 from datetime import datetime, timezone
@@ -19,6 +20,7 @@ _scheduler_task: asyncio.Task | None = None
 _stop_scheduler = asyncio.Event()
 _send_times: deque[float] = deque()
 _group_sync_at: float = 0
+_cooldown_cleanup_at: float = 0
 
 
 def _smtp_send(settings, recipient: str, subject: str, body: str) -> None:
@@ -87,19 +89,24 @@ def _duplicate_cooling_settings(conn) -> tuple[int, int]:
     ).fetchall()
     values = {str(row["key"]): str(row["value"]) for row in rows}
     try:
-        threshold = max(2, int(values.get("duplicate_message_threshold", "3")))
+        threshold = max(2, int(values.get("duplicate_message_threshold", "2")))
         cooldown_seconds = max(
             60, int(values.get("duplicate_message_cooldown_seconds", "600"))
         )
     except ValueError:
-        return 3, 600
+        return 2, 600
     return threshold, cooldown_seconds
 
 
 def _should_suppress_duplicate(
     conn, text: str, threshold: int, cooldown_seconds: int, now: float
 ) -> bool:
-    normalized = re.sub(r"\s+", " ", text).strip().casefold()
+    normalized = unicodedata.normalize("NFKC", text).casefold()
+    normalized = "".join(
+        character
+        for character in normalized
+        if not character.isspace() and unicodedata.category(character) != "Cf"
+    )
     fingerprint = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     state = conn.execute(
         "SELECT occurrence_count, last_seen_at, cooldown_until "
@@ -145,6 +152,17 @@ def _should_suppress_duplicate(
         ),
     )
     return enters_cooldown
+
+
+def _prune_duplicate_state(conn, now: float, cooldown_seconds: int) -> None:
+    global _cooldown_cleanup_at
+    if now - _cooldown_cleanup_at < 300:
+        return
+    conn.execute(
+        "DELETE FROM keyword_message_cooldowns WHERE last_seen_at < ?",
+        (now - cooldown_seconds,),
+    )
+    _cooldown_cleanup_at = now
 
 
 def run() -> None:
@@ -205,6 +223,24 @@ def run() -> None:
             matched_keywords = list(
                 dict.fromkeys(str(row["display_text"]) for row in matched_rows)
             )
+            now = datetime.now(timezone.utc)
+            _prune_duplicate_state(
+                conn, now.timestamp(), duplicate_cooldown_seconds
+            )
+            if _should_suppress_duplicate(
+                conn,
+                text,
+                duplicate_threshold,
+                duplicate_cooldown_seconds,
+                now.timestamp(),
+            ):
+                nonebot.logger.info(
+                    "duplicate_message_suppressed group_id=%s user_id=%s message_id=%s",
+                    event.group_id,
+                    event.user_id,
+                    event.message_id,
+                )
+                return
             cursor = conn.execute(
                 """
                 INSERT INTO keyword_hits(
@@ -223,47 +259,35 @@ def run() -> None:
                     json.dumps(message_segments(event.get_message()), ensure_ascii=False),
                     text,
                     str(event.message_id),
-                    datetime.now(timezone.utc).isoformat(),
+                    now.isoformat(),
                 ),
             )
             hit_id = int(cursor.lastrowid)
-            if _should_suppress_duplicate(
-                conn,
-                text,
-                duplicate_threshold,
-                duplicate_cooldown_seconds,
-                datetime.now(timezone.utc).timestamp(),
-            ):
+            destination_ids: set[int] = set()
+            for row in matched_rows:
+                destinations = conn.execute(
+                    "SELECT DISTINCT d.id FROM notification_destinations d "
+                    "WHERE d.enabled=1 AND ("
+                    "EXISTS (SELECT 1 FROM keyword_notification_bindings kb "
+                    "WHERE kb.keyword_id=? AND kb.destination_id=d.id AND kb.enabled=1) "
+                    "OR (NOT EXISTS (SELECT 1 FROM keyword_notification_bindings kbx "
+                    "WHERE kbx.keyword_id=?) AND EXISTS (SELECT 1 FROM notification_destination_bindings b "
+                    "JOIN group_notification_settings s ON s.group_id=b.group_id "
+                    "WHERE b.group_id=? AND b.destination_id=d.id "
+                    "AND ((d.kind='qq' AND s.qq_enabled=1) OR (d.kind='email' AND s.email_enabled=1))))"
+                    ")",
+                    (row["id"], row["id"], str(event.group_id)),
+                ).fetchall()
+                destination_ids.update(int(item["id"]) for item in destinations)
+            for destination_id in destination_ids:
                 conn.execute(
-                    "UPDATE keyword_hits SET notify_status='suppressed_cooldown' WHERE id=?",
-                    (hit_id,),
+                    "INSERT OR IGNORE INTO notification_jobs(hit_id, destination_id) VALUES (?, ?)",
+                    (hit_id, destination_id),
                 )
-            else:
-                destination_ids: set[int] = set()
-                for row in matched_rows:
-                    destinations = conn.execute(
-                        "SELECT DISTINCT d.id FROM notification_destinations d "
-                        "WHERE d.enabled=1 AND ("
-                        "EXISTS (SELECT 1 FROM keyword_notification_bindings kb "
-                        "WHERE kb.keyword_id=? AND kb.destination_id=d.id AND kb.enabled=1) "
-                        "OR (NOT EXISTS (SELECT 1 FROM keyword_notification_bindings kbx "
-                        "WHERE kbx.keyword_id=?) AND EXISTS (SELECT 1 FROM notification_destination_bindings b "
-                        "JOIN group_notification_settings s ON s.group_id=b.group_id "
-                        "WHERE b.group_id=? AND b.destination_id=d.id "
-                        "AND ((d.kind='qq' AND s.qq_enabled=1) OR (d.kind='email' AND s.email_enabled=1))))"
-                        ")",
-                        (row["id"], row["id"], str(event.group_id)),
-                    ).fetchall()
-                    destination_ids.update(int(item["id"]) for item in destinations)
-                for destination_id in destination_ids:
-                    conn.execute(
-                        "INSERT OR IGNORE INTO notification_jobs(hit_id, destination_id) VALUES (?, ?)",
-                        (hit_id, destination_id),
-                    )
-                conn.execute(
-                    "UPDATE keyword_hits SET notify_status=? WHERE id=?",
-                    ("queued" if destination_ids else "no_destination", hit_id),
-                )
+            conn.execute(
+                "UPDATE keyword_hits SET notify_status=? WHERE id=?",
+                ("queued" if destination_ids else "no_destination", hit_id),
+            )
         nonebot.logger.info(
             "keyword_hit group_id=%s user_id=%s message_id=%s",
             event.group_id,

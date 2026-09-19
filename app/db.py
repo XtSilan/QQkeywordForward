@@ -110,6 +110,9 @@ CREATE TABLE IF NOT EXISTS keyword_message_cooldowns (
 CREATE INDEX IF NOT EXISTS idx_keyword_message_cooldowns_until
   ON keyword_message_cooldowns(cooldown_until);
 
+CREATE INDEX IF NOT EXISTS idx_keyword_message_cooldowns_seen
+  ON keyword_message_cooldowns(last_seen_at);
+
 CREATE TABLE IF NOT EXISTS broadcast_tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -258,6 +261,8 @@ def _migrate_duplicate_message_cooldowns(connection: sqlite3.Connection) -> None
         ALTER TABLE keyword_message_cooldowns_new RENAME TO keyword_message_cooldowns;
         CREATE INDEX idx_keyword_message_cooldowns_until
           ON keyword_message_cooldowns(cooldown_until);
+        CREATE INDEX idx_keyword_message_cooldowns_seen
+          ON keyword_message_cooldowns(last_seen_at);
         COMMIT;
         """
     )
@@ -274,11 +279,19 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('config_revision', '1')"
         )
         connection.execute(
-            "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('duplicate_message_threshold', '3')"
+            "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('duplicate_message_threshold', '2')"
         )
         connection.execute(
             "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('duplicate_message_cooldown_seconds', '600')"
         )
+        default_upgrade = connection.execute(
+            "INSERT OR IGNORE INTO app_meta(key, value) "
+            "VALUES ('duplicate_message_filter_defaults_v2', 'applied')"
+        )
+        if default_upgrade.rowcount:
+            connection.execute(
+                "UPDATE app_meta SET value='2' WHERE key='duplicate_message_threshold'"
+            )
         connection.commit()
 
 

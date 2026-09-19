@@ -219,7 +219,7 @@ class SmtpSettingsPayload(BaseModel):
 
 
 class DuplicateMessageSettingsPayload(BaseModel):
-    threshold: int = Field(default=3, ge=2, le=100)
+    threshold: int = Field(default=2, ge=2, le=100)
     cooldown_minutes: int = Field(default=10, ge=1, le=1440)
 
 
@@ -245,7 +245,7 @@ def get_duplicate_message_cooling() -> dict[str, int]:
         ).fetchall()
     values = {str(row["key"]): str(row["value"]) for row in rows}
     return {
-        "threshold": int(values.get("duplicate_message_threshold", "3")),
+        "threshold": int(values.get("duplicate_message_threshold", "2")),
         "cooldown_minutes": max(
             1, int(values.get("duplicate_message_cooldown_seconds", "600")) // 60
         ),
