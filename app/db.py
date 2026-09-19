@@ -101,12 +101,10 @@ CREATE TABLE IF NOT EXISTS keyword_notification_bindings (
 );
 
 CREATE TABLE IF NOT EXISTS keyword_message_cooldowns (
-  keyword_id INTEGER NOT NULL REFERENCES keyword_rules(id),
-  message_fingerprint TEXT NOT NULL,
+  message_fingerprint TEXT PRIMARY KEY,
   occurrence_count INTEGER NOT NULL DEFAULT 1,
   last_seen_at REAL NOT NULL,
-  cooldown_until REAL,
-  PRIMARY KEY(keyword_id, message_fingerprint)
+  cooldown_until REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_keyword_message_cooldowns_until
@@ -230,12 +228,48 @@ def _migrate_broadcast_interval(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys = ON")
 
 
+def _migrate_duplicate_message_cooldowns(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(keyword_message_cooldowns)"
+        ).fetchall()
+    }
+    if "keyword_id" not in columns:
+        return
+
+    connection.executescript(
+        """
+        BEGIN;
+        DROP INDEX IF EXISTS idx_keyword_message_cooldowns_until;
+        CREATE TABLE keyword_message_cooldowns_new (
+          message_fingerprint TEXT PRIMARY KEY,
+          occurrence_count INTEGER NOT NULL DEFAULT 1,
+          last_seen_at REAL NOT NULL,
+          cooldown_until REAL
+        );
+        INSERT INTO keyword_message_cooldowns_new(
+          message_fingerprint, occurrence_count, last_seen_at, cooldown_until
+        )
+        SELECT message_fingerprint, MAX(occurrence_count), MAX(last_seen_at), MAX(cooldown_until)
+        FROM keyword_message_cooldowns
+        GROUP BY message_fingerprint;
+        DROP TABLE keyword_message_cooldowns;
+        ALTER TABLE keyword_message_cooldowns_new RENAME TO keyword_message_cooldowns;
+        CREATE INDEX idx_keyword_message_cooldowns_until
+          ON keyword_message_cooldowns(cooldown_until);
+        COMMIT;
+        """
+    )
+
+
 def init_db() -> None:
     settings = get_settings()
     Path(settings.database_path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(settings.database_path) as connection:
         connection.executescript(SCHEMA)
         _migrate_broadcast_interval(connection)
+        _migrate_duplicate_message_cooldowns(connection)
         connection.execute(
             "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('config_revision', '1')"
         )

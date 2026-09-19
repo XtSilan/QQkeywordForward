@@ -1,7 +1,7 @@
+import asyncio
+import hashlib
 import json
 import re
-import hashlib
-import asyncio
 import smtplib
 from email.message import EmailMessage
 from collections import deque
@@ -97,20 +97,20 @@ def _duplicate_cooling_settings(conn) -> tuple[int, int]:
 
 
 def _should_suppress_duplicate(
-    conn, keyword_id: int, text: str, threshold: int, cooldown_seconds: int, now: float
+    conn, text: str, threshold: int, cooldown_seconds: int, now: float
 ) -> bool:
     normalized = re.sub(r"\s+", " ", text).strip().casefold()
     fingerprint = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
     state = conn.execute(
         "SELECT occurrence_count, last_seen_at, cooldown_until "
-        "FROM keyword_message_cooldowns WHERE keyword_id=? AND message_fingerprint=?",
-        (keyword_id, fingerprint),
+        "FROM keyword_message_cooldowns WHERE message_fingerprint=?",
+        (fingerprint,),
     ).fetchone()
     if not state:
         conn.execute(
-            "INSERT INTO keyword_message_cooldowns(keyword_id, message_fingerprint, occurrence_count, last_seen_at) "
-            "VALUES (?, ?, 1, ?)",
-            (keyword_id, fingerprint, now),
+            "INSERT INTO keyword_message_cooldowns(message_fingerprint, occurrence_count, last_seen_at) "
+            "VALUES (?, 1, ?)",
+            (fingerprint, now),
         )
         return False
 
@@ -118,8 +118,8 @@ def _should_suppress_duplicate(
     if cooldown_until > now:
         conn.execute(
             "UPDATE keyword_message_cooldowns SET last_seen_at=? "
-            "WHERE keyword_id=? AND message_fingerprint=?",
-            (now, keyword_id, fingerprint),
+            "WHERE message_fingerprint=?",
+            (now, fingerprint),
         )
         return True
 
@@ -127,8 +127,8 @@ def _should_suppress_duplicate(
     if cooldown_until or now - last_seen_at >= cooldown_seconds:
         conn.execute(
             "UPDATE keyword_message_cooldowns SET occurrence_count=1, last_seen_at=?, cooldown_until=NULL "
-            "WHERE keyword_id=? AND message_fingerprint=?",
-            (now, keyword_id, fingerprint),
+            "WHERE message_fingerprint=?",
+            (now, fingerprint),
         )
         return False
 
@@ -136,12 +136,11 @@ def _should_suppress_duplicate(
     enters_cooldown = occurrence_count >= threshold
     conn.execute(
         "UPDATE keyword_message_cooldowns SET occurrence_count=?, last_seen_at=?, cooldown_until=? "
-        "WHERE keyword_id=? AND message_fingerprint=?",
+        "WHERE message_fingerprint=?",
         (
             occurrence_count,
             now,
             now + cooldown_seconds if enters_cooldown else None,
-            keyword_id,
             fingerprint,
         ),
     )
@@ -193,66 +192,77 @@ def run() -> None:
                 (str(event.group_id),),
             ).fetchall()
             flags = re.IGNORECASE
-            for row in rows:
-                pattern = row["pattern"]
-                if re.search(pattern, text, flags if row["ignore_case"] else 0) is None:
-                    continue
-                cursor = conn.execute(
-                    """
-                    INSERT INTO keyword_hits(
-                      group_id, group_name, sender_id, sender_name, keyword_id,
-                      keyword_text_snapshot, message_json, message_text,
-                      message_id, hit_at
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                    """,
-                    (
-                        str(event.group_id),
-                        row["name"],
-                        str(event.user_id),
-                        event.sender.card or event.sender.nickname or "",
-                        row["id"],
-                        row["display_text"],
-                        json.dumps(message_segments(event.get_message()), ensure_ascii=False),
-                        text,
-                        str(event.message_id),
-                        datetime.now(timezone.utc).isoformat(),
-                    ),
+            matched_rows = [
+                row
+                for row in rows
+                if re.search(
+                    row["pattern"], text, flags if row["ignore_case"] else 0
                 )
-                hit_id = int(cursor.lastrowid)
-                if _should_suppress_duplicate(
-                    conn,
-                    int(row["id"]),
+                is not None
+            ]
+            if not matched_rows:
+                return
+            matched_keywords = list(
+                dict.fromkeys(str(row["display_text"]) for row in matched_rows)
+            )
+            cursor = conn.execute(
+                """
+                INSERT INTO keyword_hits(
+                  group_id, group_name, sender_id, sender_name, keyword_id,
+                  keyword_text_snapshot, message_json, message_text,
+                  message_id, hit_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(event.group_id),
+                    matched_rows[0]["name"],
+                    str(event.user_id),
+                    event.sender.card or event.sender.nickname or "",
+                    matched_rows[0]["id"],
+                    "、".join(matched_keywords),
+                    json.dumps(message_segments(event.get_message()), ensure_ascii=False),
                     text,
-                    duplicate_threshold,
-                    duplicate_cooldown_seconds,
-                    datetime.now(timezone.utc).timestamp(),
-                ):
-                    conn.execute(
-                        "UPDATE keyword_hits SET notify_status='suppressed_cooldown' WHERE id=?",
-                        (hit_id,),
-                    )
-                    continue
-                destinations = conn.execute(
-                    "SELECT DISTINCT d.id FROM notification_destinations d "
-                    "WHERE d.enabled=1 AND ("
-                    "EXISTS (SELECT 1 FROM keyword_notification_bindings kb "
-                    "WHERE kb.keyword_id=? AND kb.destination_id=d.id AND kb.enabled=1) "
-                    "OR (NOT EXISTS (SELECT 1 FROM keyword_notification_bindings kbx "
-                    "WHERE kbx.keyword_id=?) AND EXISTS (SELECT 1 FROM notification_destination_bindings b "
-                    "JOIN group_notification_settings s ON s.group_id=b.group_id "
-                    "WHERE b.group_id=? AND b.destination_id=d.id "
-                    "AND ((d.kind='qq' AND s.qq_enabled=1) OR (d.kind='email' AND s.email_enabled=1))))"
-                    ")",
-                    (row["id"], row["id"], str(event.group_id)),
-                ).fetchall()
-                for destination in destinations:
+                    str(event.message_id),
+                    datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            hit_id = int(cursor.lastrowid)
+            if _should_suppress_duplicate(
+                conn,
+                text,
+                duplicate_threshold,
+                duplicate_cooldown_seconds,
+                datetime.now(timezone.utc).timestamp(),
+            ):
+                conn.execute(
+                    "UPDATE keyword_hits SET notify_status='suppressed_cooldown' WHERE id=?",
+                    (hit_id,),
+                )
+            else:
+                destination_ids: set[int] = set()
+                for row in matched_rows:
+                    destinations = conn.execute(
+                        "SELECT DISTINCT d.id FROM notification_destinations d "
+                        "WHERE d.enabled=1 AND ("
+                        "EXISTS (SELECT 1 FROM keyword_notification_bindings kb "
+                        "WHERE kb.keyword_id=? AND kb.destination_id=d.id AND kb.enabled=1) "
+                        "OR (NOT EXISTS (SELECT 1 FROM keyword_notification_bindings kbx "
+                        "WHERE kbx.keyword_id=?) AND EXISTS (SELECT 1 FROM notification_destination_bindings b "
+                        "JOIN group_notification_settings s ON s.group_id=b.group_id "
+                        "WHERE b.group_id=? AND b.destination_id=d.id "
+                        "AND ((d.kind='qq' AND s.qq_enabled=1) OR (d.kind='email' AND s.email_enabled=1))))"
+                        ")",
+                        (row["id"], row["id"], str(event.group_id)),
+                    ).fetchall()
+                    destination_ids.update(int(item["id"]) for item in destinations)
+                for destination_id in destination_ids:
                     conn.execute(
                         "INSERT OR IGNORE INTO notification_jobs(hit_id, destination_id) VALUES (?, ?)",
-                        (hit_id, destination["id"]),
+                        (hit_id, destination_id),
                     )
                 conn.execute(
                     "UPDATE keyword_hits SET notify_status=? WHERE id=?",
-                    ("queued" if destinations else "no_destination", hit_id),
+                    ("queued" if destination_ids else "no_destination", hit_id),
                 )
         nonebot.logger.info(
             "keyword_hit group_id=%s user_id=%s message_id=%s",
@@ -304,8 +314,8 @@ async def _sync_groups(bot: Bot) -> None:
 async def _dispatch_notifications(bot: Bot) -> None:
     with connection() as conn:
         job = conn.execute(
-            "SELECT j.id, j.hit_id, d.kind, d.address, h.group_name, h.group_id, h.sender_name, "
-            "h.sender_id, h.keyword_text_snapshot, h.message_text, h.hit_at "
+            "SELECT j.id, j.hit_id, d.kind, d.address, "
+            "h.keyword_text_snapshot, h.message_text "
             "FROM notification_jobs j JOIN notification_destinations d ON d.id=j.destination_id "
             "JOIN keyword_hits h ON h.id=j.hit_id WHERE j.status='pending' "
             "AND j.next_attempt_at <= CURRENT_TIMESTAMP ORDER BY j.id LIMIT 1"
@@ -314,7 +324,7 @@ async def _dispatch_notifications(bot: Bot) -> None:
             return
         conn.execute("UPDATE notification_jobs SET status='sending', attempts=attempts+1 WHERE id=?", (job["id"],))
     message = [
-        {"type": "text", "data": {"text": f"[关键词命中]\n群：{job['group_name']}（{job['group_id']}）\n发送者：{job['sender_name']}（{job['sender_id']}）\n命中：{job['keyword_text_snapshot']}\n时间：{job['hit_at']}\n消息：{job['message_text']}"}}
+        {"type": "text", "data": {"text": f"关键词：{job['keyword_text_snapshot']}\n消息内容：{job['message_text']}"}}
     ]
     try:
         if job["kind"] == "qq":
