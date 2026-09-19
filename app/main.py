@@ -18,6 +18,31 @@ from fastapi.staticfiles import StaticFiles
 from app.control import DockerControl
 from app.db import bump_config_revision, config_revision, connection, init_db
 from app.napcat import NapCatClient
+from app.schemas.auth import AdminLoginPayload
+from app.schemas.broadcast import BroadcastTaskCreate, BroadcastTaskPatch
+from app.schemas.group import GroupPayload
+from app.schemas.keyword import (
+    KeywordBulkApply,
+    KeywordBulkUpdate,
+    KeywordConfigCreate,
+    KeywordCreate,
+    KeywordNotificationUpdate,
+    KeywordReorder,
+    KeywordUpdate,
+)
+from app.schemas.notification import (
+    DestinationCreate,
+    DestinationUpdate,
+    NotificationBulkApply,
+    NotificationChannelPayload,
+    NotificationConfigCreate,
+    NotificationSettingsPayload,
+)
+from app.schemas.settings import (
+    DuplicateMessageSettingsPayload,
+    OneBotWebsocketPayload,
+    SmtpSettingsPayload,
+)
 from app.settings import Settings, get_settings
 
 
@@ -127,10 +152,6 @@ def _valid_session(token: str, settings: Settings) -> bool:
     return hmac.compare_digest(signature, expected)
 
 
-class AdminLoginPayload(BaseModel):
-    token: str = Field(min_length=1, max_length=500)
-
-
 @app.post("/api/auth/login")
 def auth_login(payload: AdminLoginPayload, response: Response, settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     if not hmac.compare_digest(payload.token, settings.admin_token):
@@ -159,126 +180,6 @@ def auth_me(request: Request, settings: Settings = Depends(get_settings)) -> dic
 
 def napcat(settings: Settings = Depends(get_settings)) -> NapCatClient:
     return NapCatClient(settings)
-
-
-class GroupPayload(BaseModel):
-    group_id: str = Field(min_length=1, max_length=64)
-    name: str = Field(default="", max_length=200)
-    avatar_url: str = Field(default="", max_length=1000)
-
-
-class KeywordCreate(BaseModel):
-    display_text: str = Field(min_length=1, max_length=200)
-    group_ids: list[str] = Field(default_factory=list)
-    enabled: bool = False
-    cooldown_seconds: int = Field(default=60, ge=0, le=86400)
-
-
-class KeywordConfigCreate(BaseModel):
-    keywords: list[str] = Field(min_length=1, max_length=100)
-    group_ids: list[str] = Field(min_length=1)
-    destination_ids: list[int] = Field(default_factory=list)
-    enabled: bool = True
-    cooldown_seconds: int = Field(default=60, ge=0, le=86400)
-
-
-class KeywordNotificationUpdate(BaseModel):
-    destination_ids: list[int] = Field(default_factory=list)
-
-
-class KeywordUpdate(BaseModel):
-    display_text: str | None = Field(default=None, min_length=1, max_length=200)
-    enabled: bool | None = None
-    cooldown_seconds: int | None = Field(default=None, ge=0, le=86400)
-
-
-class KeywordBulkApply(BaseModel):
-    keyword_id: int
-    group_ids: list[str] = Field(min_length=1)
-    enabled: bool = False
-    cooldown_seconds: int = Field(default=60, ge=0, le=86400)
-    replace_existing: bool = False
-
-
-class KeywordBulkUpdate(BaseModel):
-    keyword_ids: list[int] = Field(min_length=1)
-    enabled: bool
-
-
-class KeywordReorder(BaseModel):
-    keyword_ids: list[int] = Field(default_factory=list)
-    alphabetical: bool = False
-
-
-class DestinationCreate(BaseModel):
-    kind: str = Field(pattern="^(qq|email)$")
-    address: str = Field(min_length=3, max_length=320)
-    display_name: str = Field(default="", max_length=100)
-
-
-class DestinationUpdate(BaseModel):
-    kind: str = Field(pattern="^(qq|email)$")
-    address: str = Field(min_length=3, max_length=320)
-    display_name: str = Field(default="", max_length=100)
-    enabled: bool = True
-    group_ids: list[str] = Field(default_factory=list)
-
-
-class NotificationChannelPayload(BaseModel):
-    kind: str = Field(pattern="^(qq|email)$")
-    address: str = Field(min_length=3, max_length=320)
-    display_name: str = Field(default="", max_length=100)
-
-
-class NotificationConfigCreate(BaseModel):
-    channels: list[NotificationChannelPayload] = Field(min_length=1, max_length=100)
-    group_ids: list[str] = Field(min_length=1)
-
-
-class NotificationSettingsPayload(BaseModel):
-    qq_enabled: bool = False
-    email_enabled: bool = False
-    destination_ids: list[int] = Field(default_factory=list)
-
-
-class NotificationBulkApply(BaseModel):
-    group_ids: list[str] = Field(min_length=1)
-    qq_enabled: bool = False
-    email_enabled: bool = False
-    destination_ids: list[int] = Field(default_factory=list)
-
-
-class BroadcastTaskCreate(BaseModel):
-    title: str = Field(min_length=1, max_length=120)
-    group_ids: list[str] = Field(min_length=1)
-    message: list[dict[str, Any]] = Field(min_length=1)
-    interval_seconds: int = Field(default=12, ge=5, le=60)
-    group_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
-
-
-class SmtpSettingsPayload(BaseModel):
-    host: str = Field(default="", max_length=255)
-    port: int = Field(default=587, ge=1, le=65535)
-    username: str = Field(default="", max_length=320)
-    password: str = Field(default="", max_length=500)
-    from_address: str = Field(default="", max_length=320)
-    starttls: bool = True
-    ssl: bool = False
-    timeout: int = Field(default=15, ge=1, le=120)
-
-
-class DuplicateMessageSettingsPayload(BaseModel):
-    threshold: int = Field(default=2, ge=2, le=100)
-    cooldown_minutes: int = Field(default=10, ge=1, le=1440)
-
-
-class OneBotWebsocketPayload(BaseModel):
-    enable: bool = False
-    url: str = Field(min_length=1, max_length=1000)
-    reconnectInterval: int = Field(default=5000, ge=100, le=3600000)
-    heartInterval: int = Field(default=30000, ge=1000, le=3600000)
-    verifyCertificate: bool = True
-    token: str | None = Field(default=None, max_length=500)
 
 
 def row_dict(row: Any) -> dict[str, Any]:
