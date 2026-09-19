@@ -100,11 +100,23 @@ CREATE TABLE IF NOT EXISTS keyword_notification_bindings (
   PRIMARY KEY(keyword_id, destination_id)
 );
 
+CREATE TABLE IF NOT EXISTS keyword_message_cooldowns (
+  keyword_id INTEGER NOT NULL REFERENCES keyword_rules(id),
+  message_fingerprint TEXT NOT NULL,
+  occurrence_count INTEGER NOT NULL DEFAULT 1,
+  last_seen_at REAL NOT NULL,
+  cooldown_until REAL,
+  PRIMARY KEY(keyword_id, message_fingerprint)
+);
+
+CREATE INDEX IF NOT EXISTS idx_keyword_message_cooldowns_until
+  ON keyword_message_cooldowns(cooldown_until);
+
 CREATE TABLE IF NOT EXISTS broadcast_tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   message_json TEXT NOT NULL,
-  interval_seconds INTEGER NOT NULL CHECK(interval_seconds >= 12),
+  interval_seconds INTEGER NOT NULL CHECK(interval_seconds >= 5),
   group_cooldown_seconds INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'draft',
   total_count INTEGER NOT NULL DEFAULT 0,
@@ -164,13 +176,74 @@ CREATE INDEX IF NOT EXISTS idx_audit_logs_created_at
 """
 
 
+def _migrate_broadcast_interval(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='broadcast_tasks'"
+    ).fetchone()
+    normalized = "".join((row[0] if row and row[0] else "").lower().split())
+    if "check(interval_seconds>=12)" not in normalized:
+        return
+
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.executescript(
+        """
+        BEGIN;
+        CREATE TABLE broadcast_tasks_new (
+          id TEXT PRIMARY KEY,
+          title TEXT NOT NULL,
+          message_json TEXT NOT NULL,
+          interval_seconds INTEGER NOT NULL CHECK(interval_seconds >= 5),
+          group_cooldown_seconds INTEGER NOT NULL DEFAULT 0,
+          status TEXT NOT NULL DEFAULT 'draft',
+          total_count INTEGER NOT NULL DEFAULT 0,
+          sent_count INTEGER NOT NULL DEFAULT 0,
+          failed_count INTEGER NOT NULL DEFAULT 0,
+          created_by TEXT NOT NULL DEFAULT 'webui',
+          created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          started_at TEXT,
+          finished_at TEXT,
+          cancelled_at TEXT
+        );
+        CREATE TABLE broadcast_task_groups_new (
+          task_id TEXT NOT NULL REFERENCES broadcast_tasks_new(id),
+          group_id TEXT NOT NULL REFERENCES groups(group_id),
+          status TEXT NOT NULL DEFAULT 'queued',
+          scheduled_at TEXT NOT NULL,
+          sent_at TEXT,
+          message_id TEXT,
+          error_code TEXT,
+          error_text TEXT,
+          attempts INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY(task_id, group_id)
+        );
+        INSERT INTO broadcast_tasks_new SELECT * FROM broadcast_tasks;
+        INSERT INTO broadcast_task_groups_new SELECT * FROM broadcast_task_groups;
+        DROP TABLE broadcast_task_groups;
+        DROP TABLE broadcast_tasks;
+        ALTER TABLE broadcast_tasks_new RENAME TO broadcast_tasks;
+        ALTER TABLE broadcast_task_groups_new RENAME TO broadcast_task_groups;
+        CREATE INDEX idx_broadcast_task_groups_due
+          ON broadcast_task_groups(status, scheduled_at);
+        COMMIT;
+        """
+    )
+    connection.execute("PRAGMA foreign_keys = ON")
+
+
 def init_db() -> None:
     settings = get_settings()
     Path(settings.database_path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(settings.database_path) as connection:
         connection.executescript(SCHEMA)
+        _migrate_broadcast_interval(connection)
         connection.execute(
             "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('config_revision', '1')"
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('duplicate_message_threshold', '3')"
+        )
+        connection.execute(
+            "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('duplicate_message_cooldown_seconds', '600')"
         )
         connection.commit()
 

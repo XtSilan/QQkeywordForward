@@ -203,7 +203,7 @@ class BroadcastTaskCreate(BaseModel):
     title: str = Field(min_length=1, max_length=120)
     group_ids: list[str] = Field(min_length=1)
     message: list[dict[str, Any]] = Field(min_length=1)
-    interval_seconds: int = Field(default=12, ge=12, le=60)
+    interval_seconds: int = Field(default=12, ge=5, le=60)
     group_cooldown_seconds: int = Field(default=0, ge=0, le=86400)
 
 
@@ -218,6 +218,11 @@ class SmtpSettingsPayload(BaseModel):
     timeout: int = Field(default=15, ge=1, le=120)
 
 
+class DuplicateMessageSettingsPayload(BaseModel):
+    threshold: int = Field(default=3, ge=2, le=100)
+    cooldown_minutes: int = Field(default=10, ge=1, le=1440)
+
+
 class OneBotWebsocketPayload(BaseModel):
     enable: bool = False
     url: str = Field(min_length=1, max_length=1000)
@@ -229,6 +234,38 @@ class OneBotWebsocketPayload(BaseModel):
 
 def row_dict(row: Any) -> dict[str, Any]:
     return dict(row)
+
+
+@app.get("/api/settings/duplicate-message-cooling", dependencies=[Depends(admin_guard)])
+def get_duplicate_message_cooling() -> dict[str, int]:
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM app_meta WHERE key IN "
+            "('duplicate_message_threshold', 'duplicate_message_cooldown_seconds')"
+        ).fetchall()
+    values = {str(row["key"]): str(row["value"]) for row in rows}
+    return {
+        "threshold": int(values.get("duplicate_message_threshold", "3")),
+        "cooldown_minutes": max(
+            1, int(values.get("duplicate_message_cooldown_seconds", "600")) // 60
+        ),
+    }
+
+
+@app.put("/api/settings/duplicate-message-cooling", dependencies=[Depends(admin_guard)])
+def put_duplicate_message_cooling(payload: DuplicateMessageSettingsPayload) -> dict[str, Any]:
+    values = {
+        "duplicate_message_threshold": str(payload.threshold),
+        "duplicate_message_cooldown_seconds": str(payload.cooldown_minutes * 60),
+    }
+    with connection() as conn:
+        for key, value in values.items():
+            conn.execute(
+                "INSERT INTO app_meta(key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (key, value),
+            )
+    return {"saved": True, **payload.model_dump(), "revision": bump_config_revision()}
 
 
 @app.get("/api/settings/smtp", dependencies=[Depends(admin_guard)])

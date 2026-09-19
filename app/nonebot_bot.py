@@ -1,5 +1,6 @@
 import json
 import re
+import hashlib
 import asyncio
 import smtplib
 from email.message import EmailMessage
@@ -79,6 +80,74 @@ def message_segments(message: Message) -> list[dict[str, object]]:
     return [{"type": segment.type, "data": dict(segment.data)} for segment in message]
 
 
+def _duplicate_cooling_settings(conn) -> tuple[int, int]:
+    rows = conn.execute(
+        "SELECT key, value FROM app_meta WHERE key IN "
+        "('duplicate_message_threshold', 'duplicate_message_cooldown_seconds')"
+    ).fetchall()
+    values = {str(row["key"]): str(row["value"]) for row in rows}
+    try:
+        threshold = max(2, int(values.get("duplicate_message_threshold", "3")))
+        cooldown_seconds = max(
+            60, int(values.get("duplicate_message_cooldown_seconds", "600"))
+        )
+    except ValueError:
+        return 3, 600
+    return threshold, cooldown_seconds
+
+
+def _should_suppress_duplicate(
+    conn, keyword_id: int, text: str, threshold: int, cooldown_seconds: int, now: float
+) -> bool:
+    normalized = re.sub(r"\s+", " ", text).strip().casefold()
+    fingerprint = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
+    state = conn.execute(
+        "SELECT occurrence_count, last_seen_at, cooldown_until "
+        "FROM keyword_message_cooldowns WHERE keyword_id=? AND message_fingerprint=?",
+        (keyword_id, fingerprint),
+    ).fetchone()
+    if not state:
+        conn.execute(
+            "INSERT INTO keyword_message_cooldowns(keyword_id, message_fingerprint, occurrence_count, last_seen_at) "
+            "VALUES (?, ?, 1, ?)",
+            (keyword_id, fingerprint, now),
+        )
+        return False
+
+    cooldown_until = float(state["cooldown_until"] or 0)
+    if cooldown_until > now:
+        conn.execute(
+            "UPDATE keyword_message_cooldowns SET last_seen_at=? "
+            "WHERE keyword_id=? AND message_fingerprint=?",
+            (now, keyword_id, fingerprint),
+        )
+        return True
+
+    last_seen_at = float(state["last_seen_at"])
+    if cooldown_until or now - last_seen_at >= cooldown_seconds:
+        conn.execute(
+            "UPDATE keyword_message_cooldowns SET occurrence_count=1, last_seen_at=?, cooldown_until=NULL "
+            "WHERE keyword_id=? AND message_fingerprint=?",
+            (now, keyword_id, fingerprint),
+        )
+        return False
+
+    occurrence_count = int(state["occurrence_count"]) + 1
+    enters_cooldown = occurrence_count >= threshold
+    conn.execute(
+        "UPDATE keyword_message_cooldowns SET occurrence_count=?, last_seen_at=?, cooldown_until=? "
+        "WHERE keyword_id=? AND message_fingerprint=?",
+        (
+            occurrence_count,
+            now,
+            now + cooldown_seconds if enters_cooldown else None,
+            keyword_id,
+            fingerprint,
+        ),
+    )
+    return enters_cooldown
+
+
 def run() -> None:
     settings = get_settings()
     init_db()
@@ -111,6 +180,7 @@ def run() -> None:
         if not text:
             return
         with connection() as conn:
+            duplicate_threshold, duplicate_cooldown_seconds = _duplicate_cooling_settings(conn)
             rows = conn.execute(
                 """
                 SELECT r.id, r.display_text, r.pattern, r.ignore_case,
@@ -149,6 +219,19 @@ def run() -> None:
                     ),
                 )
                 hit_id = int(cursor.lastrowid)
+                if _should_suppress_duplicate(
+                    conn,
+                    int(row["id"]),
+                    text,
+                    duplicate_threshold,
+                    duplicate_cooldown_seconds,
+                    datetime.now(timezone.utc).timestamp(),
+                ):
+                    conn.execute(
+                        "UPDATE keyword_hits SET notify_status='suppressed_cooldown' WHERE id=?",
+                        (hit_id,),
+                    )
+                    continue
                 destinations = conn.execute(
                     "SELECT DISTINCT d.id FROM notification_destinations d "
                     "WHERE d.enabled=1 AND ("
@@ -167,6 +250,10 @@ def run() -> None:
                         "INSERT OR IGNORE INTO notification_jobs(hit_id, destination_id) VALUES (?, ?)",
                         (hit_id, destination["id"]),
                     )
+                conn.execute(
+                    "UPDATE keyword_hits SET notify_status=? WHERE id=?",
+                    ("queued" if destinations else "no_destination", hit_id),
+                )
         nonebot.logger.info(
             "keyword_hit group_id=%s user_id=%s message_id=%s",
             event.group_id,
@@ -244,6 +331,14 @@ async def _dispatch_notifications(bot: Bot) -> None:
     else:
         with connection() as conn:
             conn.execute("UPDATE notification_jobs SET status='sent', sent_at=CURRENT_TIMESTAMP WHERE id=?", (job["id"],))
+            pending = conn.execute(
+                "SELECT COUNT(*) AS count FROM notification_jobs "
+                "WHERE hit_id=? AND status!='sent'", (job["hit_id"],)
+            ).fetchone()["count"]
+            if pending == 0:
+                conn.execute(
+                    "UPDATE keyword_hits SET notify_status='sent' WHERE id=?", (job["hit_id"],)
+                )
 
 
 async def _dispatch_broadcasts(bot: Bot) -> None:

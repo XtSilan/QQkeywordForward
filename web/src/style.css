@@ -134,6 +134,10 @@ td small { margin-top: 3px; color: #9aa4b2; font-size: 10px; }
 .danger-button:hover { background: #fff0f1; }
 .keyword-tag { display: inline-block; padding: 4px 7px; border-radius: 4px; color: #456b9c; background: #edf4fd; font-size: 11px; }
 .message-cell { max-width: 320px; overflow: hidden; color: #59697d; text-overflow: ellipsis; white-space: nowrap; }
+.notify-status { display: inline-flex; align-items: center; padding: 4px 7px; border-radius: 6px; color: #52525b; background: #f4f4f5; font-size: 10px; }
+.notify-status.sent { color: #166534; background: #f0fdf4; }
+.notify-status.suppressed_cooldown { color: #854d0e; background: #fefce8; }
+.notify-status.no_destination { color: #9f1239; background: #fff1f2; }
 .nowrap { white-space: nowrap; }
 .napcat-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, .8fr); gap: 14px; }
 .qr-panel, .napcat-info-panel, .logs-panel { padding: 20px; }
@@ -213,6 +217,8 @@ h1, h2, h3 { color: #09090b; }
 .field input:focus, .field select:focus, .field textarea:focus { outline: 2px solid rgba(24,24,27,.12); border-color: #71717a; }
 .status-chip.good { color: #166534; background: #f0fdf4; border-color: #bbf7d0; }
 .status-chip.warn { color: #854d0e; background: #fefce8; border-color: #fde68a; }
+.group-picker-shell { width: 100%; }
+.group-picker-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 34px; margin-bottom: 8px; color: #71717a; font-size: 11px; }
 .group-picker { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px; width: 100%; }
 .group-card { min-width: 0; display: flex; align-items: center; gap: 10px; padding: 10px 11px; border: 1px solid #e4e4e7; border-radius: 9px; color: #27272a; background: #fff; text-align: left; cursor: pointer; transition: border-color .15s ease, background .15s ease, box-shadow .15s ease; }
 .group-card:hover { border-color: #a1a1aa; background: #fafafa; }
