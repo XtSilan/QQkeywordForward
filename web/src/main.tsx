@@ -16,10 +16,11 @@ type Dashboard = {
 };
 
 type Group = { group_id: string; name: string; avatar_url: string; enabled: number };
-type Keyword = { id: number; display_text: string; group_count: number; destination_ids?: number[]; bindings: { group_id: string; enabled: number; cooldown_seconds: number }[] };
+type Keyword = { id: number; display_text: string; group_count: number; sort_order?: number; destination_ids?: number[]; bindings: { group_id: string; enabled: number; cooldown_seconds: number }[] };
 type HistoryItem = { id: number; group_id: string; group_name: string; sender_id: string; sender_name: string; keyword_text_snapshot: string; message_text: string; hit_at: string; notify_status: string };
 type Destination = { id: number; kind: "qq" | "email"; address: string; display_name: string; enabled: number; group_ids: string[] };
 type BroadcastTask = { id: string; title: string; status: string; total_count: number; sent_count: number; failed_count: number; interval_seconds: number; created_at: string };
+const BROADCAST_STATUS_LABEL: Record<string, string> = { draft: "草稿", queued: "排队中", running: "发送中", paused: "已暂停", completed: "已完成", completed_with_errors: "完成（有失败）", cancelled: "已取消" };
 type MessageSegment = { type: "text" | "image"; data: { text?: string; file?: string } };
 
 const notifyStatusLabels: Record<string, string> = {
@@ -181,8 +182,8 @@ function DashboardPage({ dashboard, action, restart }: { dashboard: Dashboard | 
           <div className="callout"><ShieldCheck size={17} /><span>关键词和通知设置保存后会热加载；修改连接地址、依赖或环境变量时才需要重启 NoneBot。</span></div>
         </section>
         <section className="panel activity-panel">
-          <div className="panel-heading"><div><div className="panel-kicker">ACTIVITY</div><h3>最近动态</h3></div><button className="text-button">查看全部<ChevronRight size={15} /></button></div>
-          <div className="empty-state"><div className="empty-icon"><CheckCircle2 size={22} /></div><strong>暂无动态</strong><span>关键词命中和任务发送后会显示在这里。</span></div>
+          <div className="panel-heading"><div><div className="panel-kicker">ACTIVITY</div><h3>最近动态</h3></div><span className="muted">群发任务进度</span></div>
+          <BroadcastActivity />
         </section>
       </div>
       <section className="panel quick-panel">
@@ -202,6 +203,26 @@ function BroadcastCountCard() {
   const [count, setCount] = useState("0");
   useEffect(() => { void apiJson<BroadcastTask[]>("/api/broadcast-tasks?limit=200").then((tasks) => setCount(String(tasks.filter((task) => ["queued", "running"].includes(task.status)).length))).catch(() => undefined); }, []);
   return <StatCard icon={<Send size={18} />} label="群发任务" value={count} detail="排队或执行中" tone="violet" />;
+}
+
+function BroadcastActivity() {
+  const [tasks, setTasks] = useState<BroadcastTask[]>([]);
+  useEffect(() => {
+    void apiJson<BroadcastTask[]>("/api/broadcast-tasks?limit=10").then(setTasks).catch(() => undefined);
+    const timer = window.setInterval(() => { void apiJson<BroadcastTask[]>("/api/broadcast-tasks?limit=10").then(setTasks).catch(() => undefined); }, 8000);
+    return () => window.clearInterval(timer);
+  }, []);
+  if (!tasks.length) return <div className="empty-state"><div className="empty-icon"><CheckCircle2 size={22} /></div><strong>暂无任务</strong><span>创建群发任务后进度会显示在这里。</span></div>;
+  return <div className="activity-list">{tasks.map((task) => {
+    const total = Math.max(task.total_count, 1);
+    const percent = Math.min(100, Math.round((task.sent_count / total) * 100));
+    const failed = task.failed_count ? ` · 失败 ${task.failed_count}` : "";
+    return <div className="activity-item" key={task.id}>
+      <div className="activity-row"><strong>{task.title}</strong><span className={`status-badge status-${task.status}`}>{BROADCAST_STATUS_LABEL[task.status] || task.status}</span></div>
+      <div className="activity-meta"><span>{task.sent_count}/{task.total_count}{failed}</span><span className="muted">{new Date(task.created_at).toLocaleString("zh-CN", { hour12: false })}</span></div>
+      <div className="progress-bar"><div className="progress-fill" style={{ width: `${percent}%` }} /></div>
+    </div>;
+  })}</div>;
 }
 
 function StatCard({ icon, label, value, detail, tone }: { icon: ReactNode; label: string; value: string; detail: string; tone: string }) {
@@ -264,12 +285,15 @@ function KeywordPage({ onError }: { onError: (message: string) => void }) {
   const [keywordStep, setKeywordStep] = useState<1 | 2 | 3>(1);
   const [editingKeyword, setEditingKeyword] = useState<Keyword | null>(null);
   const [groupSearch, setGroupSearch] = useState("");
+  const [keywordSearch, setKeywordSearch] = useState("");
+  const [selectedIds, setSelectedIds] = useState<number[]>([]);
+  const [dragId, setDragId] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const parseKeywords = (value: string) => Array.from(new Set(value.split(/[\s,，]+/).map((item) => item.trim()).filter(Boolean)));
   const load = async () => {
     try {
       const [keywordData, groupData, destinationData] = await Promise.all([apiJson<Keyword[]>("/api/keywords"), apiJson<Group[]>("/api/groups"), apiJson<Destination[]>("/api/destinations")]);
-      setKeywords(keywordData); setGroups(groupData); setDestinations(destinationData.filter((item) => Boolean(item.enabled)));
+      setKeywords(keywordData); setGroups(groupData); setDestinations(destinationData.filter((item) => Boolean(item.enabled))); setSelectedIds((current) => current.filter((id) => keywordData.some((item) => item.id === id)));
     } catch (reason) { onError(reason instanceof Error ? reason.message : "关键词加载失败"); }
   };
   useEffect(() => { void load(); }, []);
@@ -304,6 +328,32 @@ function KeywordPage({ onError }: { onError: (message: string) => void }) {
   };
   const removeKeyword = async (id: number) => { try { await apiJson(`/api/keywords/${id}`, { method: "DELETE" }); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "删除失败"); } };
   const visibleGroups = groups.filter((group) => `${group.name} ${group.group_id}`.toLowerCase().includes(groupSearch.toLowerCase()));
+  const filteredKeywords = keywords.filter((keyword) => keyword.display_text.toLowerCase().includes(keywordSearch.toLowerCase()));
+  const allFilteredSelected = filteredKeywords.length > 0 && filteredKeywords.every((keyword) => selectedIds.includes(keyword.id));
+  const toggleAll = () => setSelectedIds(allFilteredSelected ? [] : filteredKeywords.map((keyword) => keyword.id));
+  const toggleOne = (id: number) => setSelectedIds((current) => current.includes(id) ? current.filter((value) => value !== id) : [...current, id]);
+  const bulkToggle = async (enabled: boolean) => { if (!selectedIds.length) return; try { await apiJson("/api/keywords/bulk-toggle", { method: "POST", body: JSON.stringify({ keyword_ids: selectedIds, enabled }) }); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "批量操作失败"); } };
+  const bulkDelete = async () => { if (!selectedIds.length) return; if (!window.confirm(`确认删除选中的 ${selectedIds.length} 个关键词？`)) return; try { await apiJson("/api/keywords/bulk-delete", { method: "POST", body: JSON.stringify({ keyword_ids: selectedIds, enabled: false }) }); setSelectedIds([]); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "批量删除失败"); } };
+  const reorderAz = async () => { try { await apiJson("/api/keywords/reorder", { method: "POST", body: JSON.stringify({ keyword_ids: [], alphabetical: true }) }); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "A-Z 排序失败"); } };
+  const dropRow = async (targetId: number) => {
+    if (dragId === null || dragId === targetId) { setDragId(null); return; }
+    const ordered = [...filteredKeywords];
+    const fromIndex = ordered.findIndex((item) => item.id === dragId);
+    const toIndex = ordered.findIndex((item) => item.id === targetId);
+    if (fromIndex === -1 || toIndex === -1) { setDragId(null); return; }
+    const [moved] = ordered.splice(fromIndex, 1);
+    ordered.splice(toIndex, 0, moved);
+    const newIds = ordered.map((item) => item.id);
+    setKeywords((current) => {
+      const selected = current.filter((item) => newIds.includes(item.id));
+      const rest = current.filter((item) => !newIds.includes(item.id));
+      const map = new Map(selected.map((item) => [item.id, item]));
+      const reordered = newIds.map((id) => map.get(id)!);
+      return [...reordered, ...rest];
+    });
+    setDragId(null);
+    try { await apiJson("/api/keywords/reorder", { method: "POST", body: JSON.stringify({ keyword_ids: newIds, alphabetical: false }) }); } catch (reason) { onError(reason instanceof Error ? reason.message : "排序保存失败"); }
+  };
   return <section className="content">
     <div className="welcome-row"><div><h2>关键词规则</h2><p>一次输入多个关键词，再统一选择群聊和提醒地址。</p></div><div className="row-actions"><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button><button className="button primary" onClick={() => openKeyword()}><KeyRound size={15} />添加关键词</button></div></div>
     {keywordOpen && <div className="wizard-overlay"><section className="panel wizard-card keyword-wizard"><div className="wizard-head"><div><div className="panel-kicker">STEP {keywordStep} OF 3</div><h3>{editingKeyword ? "编辑关键词" : "添加关键词"}</h3></div><button className="icon-button" onClick={() => setKeywordOpen(false)}><X size={16} /></button></div>
@@ -311,7 +361,7 @@ function KeywordPage({ onError }: { onError: (message: string) => void }) {
       {keywordStep === 2 && <><p className="wizard-help">搜索并勾选这些关键词要监听的群聊。</p><label className="search-field"><span>⌕</span><input value={groupSearch} onChange={(event) => setGroupSearch(event.target.value)} placeholder="搜索群名称或群号" /></label><GroupPicker groups={visibleGroups} selected={groupIds} onChange={setGroupIds} /><div className="wizard-actions"><button className="button secondary" onClick={() => setKeywordStep(1)}>上一步</button><button className="button primary" onClick={() => setKeywordStep(3)} disabled={!groupIds.length}>下一步：选择提醒<ChevronRight size={15} /></button></div></>}
       {keywordStep === 3 && <><p className="wizard-help">勾选已有提醒地址，或直接填写新的 QQ/邮箱。多个地址可用换行、逗号或空格分隔。</p><DestinationPicker destinations={destinations} selected={destinationIds} onChange={setDestinationIds} /><div className="inline-destination-form"><label className="field"><span>新增 QQ 号（可多个）</span><textarea rows={3} value={newQqAddresses} onChange={(event) => setNewQqAddresses(event.target.value)} placeholder="2890207721, 123456789" /></label><label className="field"><span>新增邮箱（可多个）</span><textarea rows={3} value={newEmailAddresses} onChange={(event) => setNewEmailAddresses(event.target.value)} placeholder="name@example.com ops@example.com" /></label><label className="field destination-note"><span>备注（选填）</span><input value={newDestinationName} onChange={(event) => setNewDestinationName(event.target.value)} placeholder="例如：管理员" /></label></div><div className="wizard-actions"><button className="button secondary" onClick={() => setKeywordStep(2)}>上一步</button><button className="button primary" onClick={() => void saveKeyword()} disabled={busy || (!destinationIds.length && !newQqAddresses.trim() && !newEmailAddresses.trim())}>{busy ? "保存中" : "保存关键词与提醒"}</button></div></>}
     </section></div>}
-    <section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">CONFIGURED</div><h3>已配置关键词</h3></div><span className="muted">{keywords.length} 条</span></div>{keywords.length === 0 ? <div className="empty-state"><div className="empty-icon"><KeyRound size={22} /></div><strong>还没有关键词</strong><span>点击“添加关键词”开始配置。</span></div> : <div className="keyword-list">{keywords.map((keyword) => { const active = keyword.bindings.some((binding) => Boolean(binding.enabled)); const names = keyword.bindings.map((binding) => groups.find((group) => group.group_id === binding.group_id)?.name || binding.group_id); const notifyCount = keyword.destination_ids?.length || 0; return <div className="keyword-row" key={keyword.id}><div className="keyword-main"><span className="keyword-badge">{keyword.display_text.slice(0, 1)}</span><div><strong>{keyword.display_text}</strong><small>应用群聊：{names.join("、") || "未绑定"} · 提醒 {notifyCount} 个</small></div></div><span className="keyword-count">{names.length} 个群</span><label className="switch" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={active} onChange={() => void apiJson(`/api/keywords/${keyword.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !active }) }).then(load).catch((reason) => onError(reason instanceof Error ? reason.message : "关键词开关保存失败"))} /><span /></label><button className="button ghost compact-button" onClick={() => openKeyword(keyword)}>编辑</button><button className="icon-button danger-button" onClick={() => void removeKeyword(keyword.id)} aria-label={`删除 ${keyword.display_text}`}><X size={16} /></button></div>; })}</div>}</section>
+    <section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">CONFIGURED</div><h3>已配置关键词</h3></div><span className="muted">{keywords.length} 条{filteredKeywords.length !== keywords.length ? ` · 筛选后 ${filteredKeywords.length} 条` : ""}</span></div>{keywords.length === 0 ? <div className="empty-state"><div className="empty-icon"><KeyRound size={22} /></div><strong>还没有关键词</strong><span>点击“添加关键词”开始配置。</span></div> : <><div className="list-toolbar"><label className="search-field"><span>⌕</span><input value={keywordSearch} onChange={(event) => setKeywordSearch(event.target.value)} placeholder="搜索关键词" /></label>{selectedIds.length > 0 ? <div className="bulk-actions"><span className="muted">已选 {selectedIds.length} 项</span><button className="button secondary compact-button" onClick={() => void bulkToggle(true)}>批量启用</button><button className="button secondary compact-button" onClick={() => void bulkToggle(false)}>批量禁用</button><button className="button danger compact-button" onClick={() => void bulkDelete()}>批量删除</button><button className="button ghost compact-button" onClick={() => setSelectedIds([])}>取消选择</button></div> : <div className="bulk-actions"><label className="check-field compact-check"><input type="checkbox" checked={allFilteredSelected} onChange={toggleAll} disabled={filteredKeywords.length === 0} />全选当前</label><button className="button ghost compact-button" onClick={() => void reorderAz()} title="按 A-Z 重新排序">A-Z 排序</button></div>}</div><div className="keyword-list">{filteredKeywords.map((keyword) => { const active = keyword.bindings.some((binding) => Boolean(binding.enabled)); const names = keyword.bindings.map((binding) => groups.find((group) => group.group_id === binding.group_id)?.name || binding.group_id); const notifyCount = keyword.destination_ids?.length || 0; const selected = selectedIds.includes(keyword.id); const isDragging = dragId === keyword.id; const preview = names.length > 3 ? `${names.slice(0, 3).join("、")}... +${names.length - 3} 个` : (names.join("、") || "未绑定"); return <div className={`keyword-row${selected ? " selected" : ""}${isDragging ? " dragging" : ""}`} key={keyword.id} draggable={!keywordSearch} onDragStart={() => setDragId(keyword.id)} onDragOver={(event) => { if (dragId !== null && dragId !== keyword.id) event.preventDefault(); }} onDrop={() => void dropRow(keyword.id)} onDragEnd={() => setDragId(null)}><span className="drag-handle" title="拖拽排序">⠿</span><label className="row-check" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={selected} onChange={() => toggleOne(keyword.id)} /></label><div className="keyword-main"><span className="keyword-badge">{keyword.display_text.slice(0, 1)}</span><div><strong>{keyword.display_text}</strong><small title={names.join("、") || "未绑定"}>应用群聊：{preview} · 提醒 {notifyCount} 个</small></div></div><span className="keyword-count">{names.length} 个群</span><label className="switch" onClick={(event) => event.stopPropagation()}><input type="checkbox" checked={active} onChange={() => void apiJson(`/api/keywords/${keyword.id}`, { method: "PATCH", body: JSON.stringify({ enabled: !active }) }).then(load).catch((reason) => onError(reason instanceof Error ? reason.message : "关键词开关保存失败"))} /><span /></label><button className="button ghost compact-button" onClick={() => openKeyword(keyword)}>编辑</button><button className="icon-button danger-button" onClick={() => void removeKeyword(keyword.id)} aria-label={`删除 ${keyword.display_text}`}><X size={16} /></button></div>; })}</div></>}</section>
   </section>;
 }
 
@@ -441,11 +491,20 @@ function BroadcastPage({ onError }: { onError: (message: string) => void }) {
   const [images, setImages] = useState<string[]>([]);
   const [groupOptions, setGroupOptions] = useState<Group[]>([]);
   const [interval, setInterval] = useState(5);
+  const [botOnline, setBotOnline] = useState<boolean | null>(null);
   const load = async () => { try { setTasks(await apiJson<BroadcastTask[]>("/api/broadcast-tasks")); } catch (reason) { onError(reason instanceof Error ? reason.message : "群发任务读取失败"); } };
   useEffect(() => { void load(); void apiJson<Group[]>("/api/groups").then(setGroupOptions).catch(() => undefined); }, []);
+  useEffect(() => {
+    const check = () => { void apiJson<{ isLogin: boolean }>("/api/ops/napcat/login").then((info) => setBotOnline(Boolean(info.isLogin))).catch(() => setBotOnline(null)); };
+    void check();
+    const timer = window.setInterval(check, 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const patch = async (id: string, action: "pause" | "resume" | "cancel") => { try { await apiJson(`/api/broadcast-tasks/${id}/${action}`, { method: "POST" }); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "操作失败"); } };
+  const patchInterval = async (id: string, value: number) => { if (value < 5 || value > 60) return; try { await apiJson(`/api/broadcast-tasks/${id}`, { method: "PATCH", body: JSON.stringify({ interval_seconds: value }) }); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "调速失败"); } };
   const create = async (event: React.FormEvent) => { event.preventDefault(); try { const segments: MessageSegment[] = []; if (message) segments.push({ type: "text", data: { text: message } }); images.forEach((file) => segments.push({ type: "image", data: { file } })); await apiJson("/api/broadcast-tasks", { method: "POST", body: JSON.stringify({ title, group_ids: groups, message: segments, interval_seconds: interval }) }); setTitle(""); setGroups([]); setMessage(""); setImages([]); await load(); } catch (reason) { onError(reason instanceof Error ? reason.message : "群发任务创建失败"); } };
   const upload = async (file: File) => { const data = new FormData(); data.append("file", file); const response = await fetch("/api/uploads/image", { method: "POST", credentials: "include", body: data }); const body = await response.json(); if (!response.ok) throw new Error(body.detail || "图片上传失败"); setImages((current) => [...current, body.url]); };
-  return <section className="content"><div className="welcome-row"><div><h2>群发任务</h2><p>群间延迟最低 5 秒，系统仍限制每分钟最多发送 5 个群。</p></div><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button></div><section className="panel form-panel"><div className="panel-heading"><div><div className="panel-kicker">NEW TASK</div><h3>创建群发任务</h3></div></div><form className="broadcast-form" onSubmit={(event) => void create(event)}><label className="field"><span>任务名称</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：活动通知" required /></label><div className="field field-wide"><span>目标群聊</span><GroupPicker groups={groupOptions} selected={groups} onChange={setGroups} /><small>可逐个选择，也可一键全选。</small></div><label className="field field-wide"><span>消息内容</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="支持换行" rows={4} /></label><label className="field"><span>插入图片</span><input type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file).catch((reason) => onError(reason instanceof Error ? reason.message : "图片上传失败")); }} />{images.map((image) => <span key={image} className="message-image"><img src={image} alt="待发送图片" /><button type="button" className="icon-button" onClick={() => setImages((current) => current.filter((item) => item !== image))}><X size={14} /></button></span>)}</label><label className="field"><span>群间延时（秒）</span><input type="number" min={5} max={60} value={interval} onChange={(event) => setInterval(Number(event.target.value))} /></label><button className="button primary"><Send size={15} />创建任务</button></form></section><section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">TASKS</div><h3>任务进度</h3></div><span className="muted">{tasks.length} 个任务</span></div>{tasks.length === 0 ? <div className="empty-state"><div className="empty-icon"><Send size={22} /></div><strong>暂无群发任务</strong><span>创建任务后，进度会显示在这里。</span></div> : <div className="table-wrap"><table><thead><tr><th>任务</th><th>状态</th><th>进度</th><th>创建时间</th></tr></thead><tbody>{tasks.map((task) => <tr key={task.id}><td><strong>{task.title}</strong><small>{task.id.slice(0, 8)}</small></td><td>{task.status}</td><td>{task.sent_count}/{task.total_count}{task.failed_count ? ` · 失败 ${task.failed_count}` : ""}</td><td className="nowrap">{new Date(task.created_at).toLocaleString("zh-CN", { hour12: false })}</td></tr>)}</tbody></table></div>}</section></section>;
+  return <section className="content"><div className="welcome-row"><div><h2>群发任务</h2><p>群间延迟最低 5 秒，系统仍限制每分钟最多发送 5 个群。</p></div><button className="button secondary" onClick={() => void load()}><RefreshCw size={15} />刷新</button></div><section className="panel form-panel"><div className="panel-heading"><div><div className="panel-kicker">NEW TASK</div><h3>创建群发任务</h3></div></div><form className="broadcast-form" onSubmit={(event) => void create(event)}><label className="field"><span>任务名称</span><input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="例如：活动通知" required /></label><div className="field field-wide"><span>目标群聊</span><GroupPicker groups={groupOptions} selected={groups} onChange={setGroups} /><small>可逐个选择，也可一键全选。</small></div><label className="field field-wide"><span>消息内容</span><textarea value={message} onChange={(event) => setMessage(event.target.value)} placeholder="支持换行" rows={4} /></label><label className="field"><span>插入图片</span><input type="file" accept="image/jpeg,image/png,image/gif,image/webp" onChange={(event) => { const file = event.target.files?.[0]; if (file) void upload(file).catch((reason) => onError(reason instanceof Error ? reason.message : "图片上传失败")); }} />{images.map((image) => <span key={image} className="message-image"><img src={image} alt="待发送图片" /><button type="button" className="icon-button" onClick={() => setImages((current) => current.filter((item) => item !== image))}><X size={14} /></button></span>)}</label><label className="field"><span>群间延时（秒）</span><input type="number" min={5} max={60} value={interval} onChange={(event) => setInterval(Number(event.target.value))} /></label><button className="button primary"><Send size={15} />创建任务</button></form></section>{botOnline === false && <div className="callout warning"><CircleAlert size={17} /><span>Bot 未连接（NapCat 未登录或反向 WS 未就绪）。新建任务会保持排队，登录恢复后自动发送。</span></div>}<section className="panel table-panel"><div className="panel-heading"><div><div className="panel-kicker">TASKS</div><h3>任务进度</h3></div><span className="muted">{tasks.length} 个任务</span></div>{tasks.length === 0 ? <div className="empty-state"><div className="empty-icon"><Send size={22} /></div><strong>暂无群发任务</strong><span>创建任务后，进度会显示在这里。</span></div> : <div className="table-wrap"><table><thead><tr><th>任务</th><th>状态</th><th>进度</th><th>创建时间</th><th>操作</th></tr></thead><tbody>{tasks.map((task) => <tr key={task.id}><td><strong>{task.title}</strong><small>{task.id.slice(0, 8)}</small></td><td><span className={`status-badge status-${task.status}`}>{BROADCAST_STATUS_LABEL[task.status] || task.status}</span></td><td>{task.sent_count}/{task.total_count}{task.failed_count ? ` · 失败 ${task.failed_count}` : ""}</td><td className="nowrap">{new Date(task.created_at).toLocaleString("zh-CN", { hour12: false })}</td><td className="nowrap task-actions">{["queued","running"].includes(task.status) ? <><button className="button secondary compact-button" onClick={() => void patch(task.id, "pause")}>暂停</button><button className="button danger compact-button" onClick={() => void patch(task.id, "cancel")}>取消</button></> : task.status === "paused" ? <><button className="button primary compact-button" onClick={() => void patch(task.id, "resume")}>继续</button><button className="button danger compact-button" onClick={() => void patch(task.id, "cancel")}>取消</button></> : <span className="muted">—</span>}{["queued","running","paused"].includes(task.status) && <label className="inline-input"><span>间隔</span><input type="number" min={5} max={60} defaultValue={task.interval_seconds} onBlur={(event) => { const value = Number(event.target.value); if (value !== task.interval_seconds) void patchInterval(task.id, value); }} /></label>}</td></tr>)}</tbody></table></div>}</section></section>;
 }
 
 function PlaceholderPage({ active }: { active: string }) {

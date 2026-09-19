@@ -3,6 +3,7 @@ import json
 import uuid
 import hmac
 import hashlib
+import asyncio
 import time
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -50,8 +51,46 @@ async def audit_mutations(request: Request, call_next):
 
 
 @app.on_event("startup")
-def startup() -> None:
+async def startup() -> None:
     init_db()
+    settings = get_settings()
+    # Auto-push ONEBOT_WS_URL into NapCat once QQ is logged in so users don't
+    # have to open the WebUI to wire up the reverse-WS client.
+    if settings.onebot_ws_url:
+        asyncio.create_task(_auto_apply_onebot_config(settings))
+
+
+async def _auto_apply_onebot_config(settings: Settings) -> None:
+    client = NapCatClient(settings)
+    while True:
+        try:
+            status = await client.login_status()
+            if isinstance(status, dict) and status.get("isLogin"):
+                config = await client.onebot_config()
+                network = (config if isinstance(config, dict) else {}).setdefault("network", {})
+                clients = network.setdefault("websocketClients", [])
+                item = next((value for value in clients if value.get("name") == "websocket-client"), None)
+                if item is None:
+                    item = {
+                        "name": "websocket-client",
+                        "messagePostFormat": "array",
+                        "reportSelfMessage": False,
+                        "debug": False,
+                        "heartInterval": 30000,
+                        "reconnectInterval": 5000,
+                    }
+                    clients.append(item)
+                # Only push when missing or mismatched; avoids fighting a user
+                # who manually customised other fields in the NapCat WebUI.
+                if item.get("url") != settings.onebot_ws_url or not item.get("enable"):
+                    item["enable"] = True
+                    item["url"] = settings.onebot_ws_url
+                    if settings.onebot_access_token:
+                        item["token"] = settings.onebot_access_token
+                    await client.set_onebot_config(config)
+        except Exception:
+            pass
+        await asyncio.sleep(30)
 
 
 def admin_guard(
@@ -159,6 +198,16 @@ class KeywordBulkApply(BaseModel):
     enabled: bool = False
     cooldown_seconds: int = Field(default=60, ge=0, le=86400)
     replace_existing: bool = False
+
+
+class KeywordBulkUpdate(BaseModel):
+    keyword_ids: list[int] = Field(min_length=1)
+    enabled: bool
+
+
+class KeywordReorder(BaseModel):
+    keyword_ids: list[int] = Field(default_factory=list)
+    alphabetical: bool = False
 
 
 class DestinationCreate(BaseModel):
@@ -449,13 +498,13 @@ def keywords(group_id: str | None = Query(default=None)) -> list[dict[str, Any]]
     with connection() as conn:
         rows = conn.execute(
             "SELECT r.id, r.display_text, r.match_mode, r.ignore_case, r.created_at, "
-            "r.updated_at, COUNT(DISTINCT b.group_id) AS group_count "
+            "r.updated_at, r.sort_order, COUNT(DISTINCT b.group_id) AS group_count "
             "FROM keyword_rules r LEFT JOIN group_keyword_bindings b "
             "ON b.keyword_id = r.id AND b.enabled = 1 "
             "WHERE r.deleted_at IS NULL "
             "AND (? IS NULL OR EXISTS (SELECT 1 FROM group_keyword_bindings gb "
             "WHERE gb.keyword_id = r.id AND gb.group_id = ?)) "
-            "GROUP BY r.id ORDER BY r.updated_at DESC, r.id DESC",
+            "GROUP BY r.id ORDER BY r.sort_order ASC, r.display_text COLLATE NOCASE ASC, r.id DESC",
             (group_id, group_id),
         ).fetchall()
         result = [row_dict(row) for row in rows]
@@ -483,10 +532,14 @@ def create_keyword(payload: KeywordCreate) -> dict[str, Any]:
     group_ids = list(dict.fromkeys(group_id.strip() for group_id in payload.group_ids if group_id.strip()))
     try:
         with connection() as conn:
+            next_order_row = conn.execute(
+                "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM keyword_rules WHERE deleted_at IS NULL"
+            ).fetchone()
+            next_order = int(next_order_row[0]) if next_order_row else 1
             cursor = conn.execute(
-                "INSERT INTO keyword_rules(display_text, pattern, match_mode, ignore_case, updated_at) "
-                "VALUES (?, ?, 'literal_search', 1, CURRENT_TIMESTAMP)",
-                (display_text, re.escape(display_text)),
+                "INSERT INTO keyword_rules(display_text, pattern, match_mode, ignore_case, sort_order, updated_at) "
+                "VALUES (?, ?, 'literal_search', 1, ?, CURRENT_TIMESTAMP)",
+                (display_text, re.escape(display_text), next_order),
             )
             keyword_id = int(cursor.lastrowid)
             for group_id in group_ids:
@@ -539,10 +592,14 @@ def create_keyword_config(payload: KeywordConfigCreate) -> dict[str, Any]:
                         (re.escape(display_text), keyword_id),
                     )
                 else:
+                    next_order_row = conn.execute(
+                        "SELECT COALESCE(MAX(sort_order), 0) + 1 FROM keyword_rules WHERE deleted_at IS NULL"
+                    ).fetchone()
+                    next_order = int(next_order_row[0]) if next_order_row else 1
                     cursor = conn.execute(
-                        "INSERT INTO keyword_rules(display_text, pattern, match_mode, ignore_case, updated_at) "
-                        "VALUES (?, ?, 'literal_search', 1, CURRENT_TIMESTAMP)",
-                        (display_text, re.escape(display_text)),
+                        "INSERT INTO keyword_rules(display_text, pattern, match_mode, ignore_case, sort_order, updated_at) "
+                        "VALUES (?, ?, 'literal_search', 1, ?, CURRENT_TIMESTAMP)",
+                        (display_text, re.escape(display_text), next_order),
                     )
                     keyword_id = int(cursor.lastrowid)
                 keyword_ids.append(keyword_id)
@@ -626,6 +683,63 @@ def update_keyword(keyword_id: int, payload: KeywordUpdate) -> dict[str, Any]:
             )
         conn.execute("UPDATE keyword_rules SET updated_at=CURRENT_TIMESTAMP WHERE id=?", (keyword_id,))
     return {"updated": True, "revision": bump_config_revision()}
+
+
+@app.post("/api/keywords/bulk-toggle", dependencies=[Depends(admin_guard)])
+def bulk_toggle_keywords(payload: KeywordBulkUpdate) -> dict[str, Any]:
+    with connection() as conn:
+        placeholders = ",".join("?" for _ in payload.keyword_ids)
+        cursor = conn.execute(
+            f"UPDATE group_keyword_bindings SET enabled=?, updated_at=CURRENT_TIMESTAMP "
+            f"WHERE keyword_id IN ({placeholders})",
+            (int(payload.enabled), *payload.keyword_ids),
+        )
+        if cursor.rowcount == 0:
+            # No bindings to update — still flip the keyword_rules default so
+            # future bindings inherit the desired state.
+            conn.execute(
+                f"UPDATE keyword_rules SET enabled=?, updated_at=CURRENT_TIMESTAMP "
+                f"WHERE id IN ({placeholders})",
+                (int(payload.enabled), *payload.keyword_ids),
+            )
+        conn.execute(
+            f"UPDATE keyword_rules SET updated_at=CURRENT_TIMESTAMP "
+            f"WHERE id IN ({placeholders})",
+            tuple(payload.keyword_ids),
+        )
+    return {"updated": len(payload.keyword_ids), "enabled": payload.enabled, "revision": bump_config_revision()}
+
+
+@app.post("/api/keywords/bulk-delete", dependencies=[Depends(admin_guard)])
+def bulk_delete_keywords(payload: KeywordBulkUpdate) -> dict[str, Any]:
+    with connection() as conn:
+        placeholders = ",".join("?" for _ in payload.keyword_ids)
+        conn.execute(
+            f"UPDATE keyword_rules SET deleted_at=CURRENT_TIMESTAMP WHERE id IN ({placeholders})",
+            tuple(payload.keyword_ids),
+        )
+    return {"deleted": len(payload.keyword_ids), "revision": bump_config_revision()}
+
+
+@app.post("/api/keywords/reorder", dependencies=[Depends(admin_guard)])
+def reorder_keywords(payload: KeywordReorder) -> dict[str, Any]:
+    if not payload.alphabetical and not payload.keyword_ids:
+        raise HTTPException(status_code=422, detail="keyword_ids is required for manual reorder")
+    with connection() as conn:
+        if payload.alphabetical:
+            conn.execute(
+                "UPDATE keyword_rules SET sort_order = (SELECT COUNT(*) FROM keyword_rules AS k "
+                "WHERE k.deleted_at IS NULL AND (k.display_text COLLATE NOCASE "
+                "< keyword_rules.display_text COLLATE NOCASE "
+                "OR (k.display_text = keyword_rules.display_text AND k.id < keyword_rules.id)) ) + 1 "
+                "WHERE deleted_at IS NULL"
+            )
+        else:
+            for index, keyword_id in enumerate(payload.keyword_ids, start=1):
+                conn.execute(
+                    "UPDATE keyword_rules SET sort_order=? WHERE id=?", (index, keyword_id)
+                )
+    return {"reordered": len(payload.keyword_ids), "alphabetical": payload.alphabetical, "revision": bump_config_revision()}
 
 
 @app.put("/api/keywords/{keyword_id}/notifications", dependencies=[Depends(admin_guard)])
@@ -1067,16 +1181,99 @@ def cancel_broadcast_task(task_id: str) -> dict[str, Any]:
     with connection() as conn:
         cursor = conn.execute(
             "UPDATE broadcast_tasks SET status='cancelled', cancelled_at=CURRENT_TIMESTAMP "
-            "WHERE id=? AND status IN ('draft', 'queued', 'running')",
+            "WHERE id=? AND status IN ('draft', 'queued', 'running', 'paused')",
             (task_id,),
         )
         if cursor.rowcount == 0:
             raise HTTPException(status_code=404, detail="active task not found")
         conn.execute(
-            "UPDATE broadcast_task_groups SET status='cancelled' WHERE task_id=? AND status='queued'",
+            "UPDATE broadcast_task_groups SET status='cancelled' WHERE task_id=? AND status IN ('queued','paused')",
             (task_id,),
         )
     return {"cancelled": True, "revision": bump_config_revision()}
+
+
+@app.post("/api/broadcast-tasks/{task_id}/pause", dependencies=[Depends(admin_guard)])
+def pause_broadcast_task(task_id: str) -> dict[str, Any]:
+    with connection() as conn:
+        cursor = conn.execute(
+            "UPDATE broadcast_tasks SET status='paused' "
+            "WHERE id=? AND status IN ('queued', 'running')",
+            (task_id,),
+        )
+        if cursor.rowcount == 0:
+            raise HTTPException(status_code=404, detail="running task not found")
+        conn.execute(
+            "UPDATE broadcast_task_groups SET status='paused' WHERE task_id=? AND status='queued'",
+            (task_id,),
+        )
+    return {"paused": True, "revision": bump_config_revision()}
+
+
+@app.post("/api/broadcast-tasks/{task_id}/resume", dependencies=[Depends(admin_guard)])
+def resume_broadcast_task(task_id: str) -> dict[str, Any]:
+    now = datetime.now(timezone.utc)
+    with connection() as conn:
+        task = conn.execute(
+            "SELECT interval_seconds FROM broadcast_tasks WHERE id=? AND status='paused'",
+            (task_id,),
+        ).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="paused task not found")
+        interval = task["interval_seconds"]
+        conn.execute(
+            "UPDATE broadcast_tasks SET status='running' WHERE id=?",
+            (task_id,),
+        )
+        # Re-schedule remaining queued groups starting from now so a long pause
+        # doesn't trigger a catch-up burst.
+        queued = conn.execute(
+            "SELECT group_id FROM broadcast_task_groups WHERE task_id=? AND status='paused' ORDER BY scheduled_at",
+            (task_id,),
+        ).fetchall()
+        for index, row in enumerate(queued):
+            conn.execute(
+                "UPDATE broadcast_task_groups SET status='queued', scheduled_at=? "
+                "WHERE task_id=? AND group_id=?",
+                ((now + timedelta(seconds=index * interval)).isoformat(), task_id, row["group_id"]),
+            )
+    return {"resumed": True, "interval_seconds": interval, "revision": bump_config_revision()}
+
+
+class BroadcastTaskPatch(BaseModel):
+    interval_seconds: int | None = Field(default=None, ge=5)
+
+
+@app.patch("/api/broadcast-tasks/{task_id}", dependencies=[Depends(admin_guard)])
+def patch_broadcast_task(task_id: str, payload: BroadcastTaskPatch) -> dict[str, Any]:
+    if payload.interval_seconds is None:
+        raise HTTPException(status_code=422, detail="no fields to update")
+    now = datetime.now(timezone.utc)
+    with connection() as conn:
+        task = conn.execute(
+            "SELECT status, interval_seconds FROM broadcast_tasks WHERE id=?",
+            (task_id,),
+        ).fetchone()
+        if not task:
+            raise HTTPException(status_code=404, detail="task not found")
+        if task["status"] not in ("queued", "running", "paused"):
+            raise HTTPException(status_code=409, detail=f"cannot adjust task in status {task['status']}")
+        conn.execute(
+            "UPDATE broadcast_tasks SET interval_seconds=? WHERE id=?",
+            (payload.interval_seconds, task_id),
+        )
+        # Re-schedule queued groups by the new interval so the change is visible
+        # immediately. Paused groups will be re-scheduled on resume.
+        queued = conn.execute(
+            "SELECT group_id FROM broadcast_task_groups WHERE task_id=? AND status='queued' ORDER BY scheduled_at",
+            (task_id,),
+        ).fetchall()
+        for index, row in enumerate(queued):
+            conn.execute(
+                "UPDATE broadcast_task_groups SET scheduled_at=? WHERE task_id=? AND group_id=?",
+                ((now + timedelta(seconds=index * payload.interval_seconds)).isoformat(), task_id, row["group_id"]),
+            )
+    return {"interval_seconds": payload.interval_seconds, "revision": bump_config_revision()}
 
 
 @app.get("/api/ops/napcat/login", dependencies=[Depends(admin_guard)])

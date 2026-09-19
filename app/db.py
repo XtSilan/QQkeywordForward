@@ -277,6 +277,26 @@ def _migrate_duplicate_message_cooldowns(connection: sqlite3.Connection) -> None
     )
 
 
+def _migrate_keyword_sort_order(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(keyword_rules)"
+        ).fetchall()
+    }
+    if "sort_order" in columns:
+        return
+    connection.execute(
+        "ALTER TABLE keyword_rules ADD COLUMN sort_order INTEGER NOT NULL DEFAULT 0"
+    )
+    # Initialise sort_order from oldest id -> 1,2,3,... so existing rows get a
+    # stable ordering without anyone having to touch the UI.
+    connection.execute(
+        "UPDATE keyword_rules SET sort_order = (SELECT COUNT(*) FROM keyword_rules AS k "
+        "WHERE k.id < keyword_rules.id) + 1 WHERE sort_order = 0"
+    )
+
+
 def init_db() -> None:
     settings = get_settings()
     Path(settings.database_path).parent.mkdir(parents=True, exist_ok=True)
@@ -284,6 +304,7 @@ def init_db() -> None:
         connection.executescript(SCHEMA)
         _migrate_broadcast_interval(connection)
         _migrate_duplicate_message_cooldowns(connection)
+        _migrate_keyword_sort_order(connection)
         connection.execute(
             "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('config_revision', '1')"
         )
