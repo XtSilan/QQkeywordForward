@@ -48,17 +48,14 @@ docs/                  # 设计文档（从根目录迁入）
   - [x] 验证：docker compose build webui + health + /api/keywords + /api/broadcast-tasks POST 全通过
   - [x] main.py 行数：1391 → 1293
 
-- [ ] Phase 4：后端 api router 拆分（app/api/*）
-  - [ ] deps.py（admin_guard / napcat_client）
-  - [ ] auth router
-  - [ ] keywords router
-  - [ ] broadcast router
-  - [ ] notification router
-  - [ ] groups router
-  - [ ] settings router
-  - [ ] ops router (napcat/services)
-  - [ ] dashboard / uploads / audit_logs / health
-  - [ ] main.py 瘦身为 router 挂载
+- [x] Phase 4：后端 api router 拆分（app/api/*）
+  - [x] deps.py（admin_guard / napcat / row_dict / session_token / valid_session）
+  - [x] auth.py / health.py / settings.py
+  - [x] keywords.py / broadcast.py / notifications.py / groups.py / history.py
+  - [x] dashboard.py / uploads.py / audit.py / ops.py
+  - [x] main.py 瘦身为 router 挂载：1293 → 135 行
+  - [x] 验证：路由集合重构前后完全一致（54 → 54）；本地 venv + TestClient 跑通 20 项端点检查
+  - 备注：本机 Docker Desktop 未运行，未执行 docker compose build；已用等价运行时验证替代
 
 - [ ] Phase 3：后端 services 拆分（app/services/*）
   - [ ] dispatch_loop.py（从 nonebot_bot.py 抽出调度循环）
