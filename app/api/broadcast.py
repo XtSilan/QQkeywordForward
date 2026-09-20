@@ -46,17 +46,29 @@ def create_broadcast_task(payload: BroadcastTaskCreate) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="at least one group is required")
     task_id = uuid.uuid4().hex
     with connection() as conn:
-        for group_id in group_ids:
+        # 过滤掉已禁用的群（bot 已不在、手动禁用等）
+        enabled_rows = conn.execute(
+            "SELECT group_id FROM groups WHERE enabled=1 AND group_id IN ({})".format(
+                ",".join("?" for _ in group_ids)
+            ),
+            tuple(group_ids),
+        ).fetchall()
+        enabled_ids = [r[0] for r in enabled_rows]
+        skipped = len(group_ids) - len(enabled_ids)
+        if not enabled_ids:
+            raise HTTPException(status_code=422, detail="所有目标群已被禁用，无法群发")
+        for group_id in enabled_ids:
             group_repo.ensure_group(conn, group_id)
         broadcast_repo.create(
             conn, task_id, payload.title.strip(), payload.message,
-            payload.interval_seconds, payload.group_cooldown_seconds, group_ids,
+            payload.interval_seconds, payload.group_cooldown_seconds, enabled_ids,
             payload.loop_total, payload.loop_interval_seconds,
         )
     return {
         "id": task_id,
         "status": "queued",
-        "total_count": len(group_ids),
+        "total_count": len(enabled_ids),
+        "skipped": skipped,
         "loop_total": payload.loop_total,
         "revision": bump_config_revision(),
     }

@@ -1,8 +1,12 @@
-import type { BroadcastTask, MessageSegment } from "../types/api";
+import type { BroadcastTask, BroadcastTaskDetail, MessageSegment } from "../types/api";
 import { apiJson } from "./client";
 
 export function listBroadcastTasks(limit?: number): Promise<BroadcastTask[]> {
   return apiJson<BroadcastTask[]>(`/api/broadcast-tasks${limit ? `?limit=${limit}` : ""}`);
+}
+
+export function getBroadcastTask(id: string): Promise<BroadcastTaskDetail> {
+  return apiJson<BroadcastTaskDetail>(`/api/broadcast-tasks/${id}`);
 }
 
 export function createBroadcastTask(payload: {
