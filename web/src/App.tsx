@@ -12,7 +12,9 @@ import {
   TerminalSquare,
   X,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
+import { BrowserRouter, NavLink, Route, Routes, useLocation } from "react-router-dom";
 
 import { fetchAuthMe } from "./api/auth";
 import { getDashboard } from "./api/dashboard";
@@ -25,28 +27,42 @@ import { KeywordPage } from "./pages/KeywordPage";
 import { LoginPage } from "./pages/LoginPage";
 import { LogsPage } from "./pages/LogsPage";
 import { NapCatPage } from "./pages/NapCatPage";
-import { PlaceholderPage } from "./pages/PlaceholderPage";
+import { NotFoundPage } from "./pages/NotFoundPage";
 import { SystemSettingsPage } from "./pages/SystemSettingsPage";
 import type { Dashboard, ServiceName } from "./types/api";
 import { usePoll } from "./hooks/usePoll";
 
-/** Sidebar entries. The first element is both the label and the page key. */
-const NAV_ITEMS = [
-  ["Dashboard", LayoutDashboard],
-  ["关键词", KeyRound],
-  ["历史记录", FileText],
-  ["群发任务", Send],
-  ["登录与 NapCat", ShieldCheck],
-  ["运行日志", TerminalSquare],
-  ["系统设置", Settings2],
-] as const;
+/** Sidebar entries. `to` is the history URL each page is served from. */
+type NavItem = {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  /** Only match the exact URL (used by the index route). */
+  end?: boolean;
+  /** Optional badge rendered next to the label. */
+  pill?: string;
+};
 
-type PageKey = (typeof NAV_ITEMS)[number][0];
-
-const PAGE_KEYS = NAV_ITEMS.map(([label]) => label) as readonly string[];
+const NAV_ITEMS: NavItem[] = [
+  { to: "/", label: "Dashboard", icon: LayoutDashboard, end: true },
+  { to: "/keywords", label: "关键词", icon: KeyRound },
+  { to: "/history", label: "历史记录", icon: FileText },
+  { to: "/broadcast", label: "群发任务", icon: Send },
+  { to: "/napcat", label: "登录与 NapCat", icon: ShieldCheck },
+  { to: "/logs", label: "运行日志", icon: TerminalSquare, pill: "LIVE" },
+  { to: "/settings", label: "系统设置", icon: Settings2 },
+];
 
 export function App() {
-  const [active, setActive] = useState<PageKey>("Dashboard");
+  return (
+    <BrowserRouter>
+      <AppShell />
+    </BrowserRouter>
+  );
+}
+
+function AppShell() {
+  const { pathname } = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
@@ -85,6 +101,7 @@ export function App() {
   };
 
   const napcatOnline = Boolean(dashboard?.napcat?.coreReady || dashboard?.napcat?.isLogin);
+  const title = NAV_ITEMS.find((item) => item.to === pathname)?.label ?? "页面不存在";
 
   return (
     <div className="app-shell">
@@ -110,19 +127,18 @@ export function App() {
         </div>
         <div className="sidebar-caption">管理台</div>
         <nav>
-          {NAV_ITEMS.map(([label, Icon]) => (
-            <button
-              key={label}
-              className={active === label ? "nav-item active" : "nav-item"}
-              onClick={() => {
-                setActive(label);
-                setMobileOpen(false);
-              }}
+          {NAV_ITEMS.map(({ to, label, icon: Icon, end, pill }) => (
+            <NavLink
+              key={to}
+              to={to}
+              end={end}
+              className={({ isActive }) => (isActive ? "nav-item active" : "nav-item")}
+              onClick={() => setMobileOpen(false)}
             >
               <Icon size={17} />
               <span>{label}</span>
-              {label === "运行日志" && <span className="nav-pill">LIVE</span>}
-            </button>
+              {pill && <span className="nav-pill">{pill}</span>}
+            </NavLink>
           ))}
         </nav>
         <div className="sidebar-footer">
@@ -148,7 +164,7 @@ export function App() {
           </button>
           <div>
             <div className="eyebrow">QQ 群管理机器人</div>
-            <h1>{active}</h1>
+            <h1>{title}</h1>
           </div>
           <div className="topbar-actions">
             <span className="revision">配置版本 {dashboard?.config_revision ?? "-"}</span>
@@ -169,16 +185,19 @@ export function App() {
           </div>
         )}
 
-        {active === "Dashboard" && (
-          <DashboardPage dashboard={dashboard} action={action} restart={restart} />
-        )}
-        {active === "关键词" && <KeywordPage onError={setError} />}
-        {active === "历史记录" && <HistoryPage onError={setError} />}
-        {active === "登录与 NapCat" && <NapCatPage onError={setError} />}
-        {active === "运行日志" && <LogsPage onError={setError} />}
-        {active === "群发任务" && <BroadcastPage onError={setError} />}
-        {active === "系统设置" && <SystemSettingsPage onError={setError} />}
-        {!PAGE_KEYS.includes(active) && <PlaceholderPage active={active} />}
+        <Routes>
+          <Route
+            path="/"
+            element={<DashboardPage dashboard={dashboard} action={action} restart={restart} />}
+          />
+          <Route path="/keywords" element={<KeywordPage onError={setError} />} />
+          <Route path="/history" element={<HistoryPage onError={setError} />} />
+          <Route path="/broadcast" element={<BroadcastPage onError={setError} />} />
+          <Route path="/napcat" element={<NapCatPage onError={setError} />} />
+          <Route path="/logs" element={<LogsPage onError={setError} />} />
+          <Route path="/settings" element={<SystemSettingsPage onError={setError} />} />
+          <Route path="*" element={<NotFoundPage />} />
+        </Routes>
       </main>
     </div>
   );

@@ -1,7 +1,11 @@
-"""Broadcast task routes: CRUD, cancel/pause/resume, speed adjustment.
+"""Broadcast task routes: CRUD, cancel/pause/resume.
 
 HTTP/validation concerns only — data access delegates to
 ``app.repositories.broadcast_repo``.
+
+Changing the group delay is deliberately only possible through ``resume``: a
+running task cannot be re-spaced mid-flight, which keeps the schedule the user
+sees identical to the schedule being executed.
 """
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.deps import admin_guard
 from app.db import bump_config_revision, connection
 from app.repositories import broadcast_repo, group_repo
-from app.schemas.broadcast import BroadcastTaskCreate, BroadcastTaskPatch
+from app.schemas.broadcast import BroadcastResumePayload, BroadcastTaskCreate
 
 
 router = APIRouter(
@@ -71,24 +75,22 @@ def pause_broadcast_task(task_id: str) -> dict[str, Any]:
 
 
 @router.post("/{task_id}/resume")
-def resume_broadcast_task(task_id: str) -> dict[str, Any]:
+def resume_broadcast_task(
+    task_id: str,
+    payload: BroadcastResumePayload | None = None,
+) -> dict[str, Any]:
+    """Resume a paused task, optionally under a new group delay.
+
+    Passing ``interval_seconds`` lets the UI do "pause, retune, confirm" in one
+    atomic step instead of a PATCH followed by a separate resume.
+    """
     with connection() as conn:
-        interval = broadcast_repo.paused_interval(conn, task_id)
-        if interval is None:
+        # ``paused_interval`` doubles as the guard: it returns None unless the
+        # task really is paused, so an explicit delay cannot revive a finished
+        # or cancelled task.
+        stored = broadcast_repo.paused_interval(conn, task_id)
+        if stored is None:
             raise HTTPException(status_code=404, detail="paused task not found")
+        interval = payload.interval_seconds if payload and payload.interval_seconds else stored
         broadcast_repo.resume(conn, task_id, interval)
     return {"resumed": True, "interval_seconds": interval, "revision": bump_config_revision()}
-
-
-@router.patch("/{task_id}")
-def patch_broadcast_task(task_id: str, payload: BroadcastTaskPatch) -> dict[str, Any]:
-    if payload.interval_seconds is None:
-        raise HTTPException(status_code=422, detail="no fields to update")
-    with connection() as conn:
-        status = broadcast_repo.task_status(conn, task_id)
-        if status is None:
-            raise HTTPException(status_code=404, detail="task not found")
-        if status not in ("queued", "running", "paused"):
-            raise HTTPException(status_code=409, detail=f"cannot adjust task in status {status}")
-        broadcast_repo.reschedule_queued(conn, task_id, payload.interval_seconds)
-    return {"interval_seconds": payload.interval_seconds, "revision": bump_config_revision()}

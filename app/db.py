@@ -36,6 +36,19 @@ def _migrate_broadcast_interval(connection: sqlite3.Connection) -> None:
     connection.execute("PRAGMA foreign_keys = ON")
 
 
+def _migrate_broadcast_interval_floor(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='broadcast_tasks'"
+    ).fetchone()
+    normalized = "".join((row[0] if row and row[0] else "").lower().split())
+    if "check(interval_seconds>=5)" not in normalized:
+        return
+
+    connection.execute("PRAGMA foreign_keys = OFF")
+    connection.executescript(load_migration("005_broadcast_interval_floor.sql"))
+    connection.execute("PRAGMA foreign_keys = ON")
+
+
 def _migrate_duplicate_message_cooldowns(connection: sqlite3.Connection) -> None:
     columns = {
         row[1]
@@ -67,6 +80,7 @@ def init_db() -> None:
     with sqlite3.connect(settings.database_path) as connection:
         connection.executescript(load_migration("001_initial.sql"))
         _migrate_broadcast_interval(connection)
+        _migrate_broadcast_interval_floor(connection)
         _migrate_duplicate_message_cooldowns(connection)
         _migrate_keyword_sort_order(connection)
         connection.execute(

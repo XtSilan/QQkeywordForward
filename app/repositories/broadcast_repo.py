@@ -89,9 +89,9 @@ def paused_interval(conn, task_id: str) -> int | None:
 
 def resume(conn, task_id: str, interval_seconds: int) -> None:
     now = datetime.now(timezone.utc)
-    conn.execute("UPDATE broadcast_tasks SET status='running' WHERE id=?", (task_id,))
+    conn.execute("UPDATE broadcast_tasks SET status='running', interval_seconds=? WHERE id=?", (interval_seconds, task_id))
     # Re-schedule remaining groups from now so a long pause doesn't trigger a
-    # catch-up burst.
+    # catch-up burst, and so a delay changed while paused takes effect at once.
     queued = conn.execute(
         "SELECT group_id FROM broadcast_task_groups WHERE task_id=? AND status='paused' ORDER BY scheduled_at",
         (task_id,),
@@ -99,28 +99,5 @@ def resume(conn, task_id: str, interval_seconds: int) -> None:
     for index, row in enumerate(queued):
         conn.execute(
             "UPDATE broadcast_task_groups SET status='queued', scheduled_at=? WHERE task_id=? AND group_id=?",
-            ((now + timedelta(seconds=index * interval_seconds)).isoformat(), task_id, row["group_id"]),
-        )
-
-
-def task_status(conn, task_id: str) -> str | None:
-    row = conn.execute("SELECT status FROM broadcast_tasks WHERE id=?", (task_id,)).fetchone()
-    return str(row["status"]) if row else None
-
-
-def reschedule_queued(conn, task_id: str, interval_seconds: int) -> None:
-    """Re-space queued groups under a new interval so the change shows at once."""
-    now = datetime.now(timezone.utc)
-    conn.execute(
-        "UPDATE broadcast_tasks SET interval_seconds=? WHERE id=?",
-        (interval_seconds, task_id),
-    )
-    queued = conn.execute(
-        "SELECT group_id FROM broadcast_task_groups WHERE task_id=? AND status='queued' ORDER BY scheduled_at",
-        (task_id,),
-    ).fetchall()
-    for index, row in enumerate(queued):
-        conn.execute(
-            "UPDATE broadcast_task_groups SET scheduled_at=? WHERE task_id=? AND group_id=?",
             ((now + timedelta(seconds=index * interval_seconds)).isoformat(), task_id, row["group_id"]),
         )

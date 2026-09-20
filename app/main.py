@@ -7,7 +7,7 @@ import asyncio
 import json
 from pathlib import Path
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,6 +17,7 @@ from app.api import (
     auth,
     broadcast,
     dashboard,
+    events,
     groups,
     health,
     history,
@@ -80,6 +81,7 @@ for router in (
     history.router,
     broadcast.router,
     dashboard.router,
+    events.router,
     uploads.router,
     audit.router,
     ops.router,
@@ -96,7 +98,18 @@ if frontend.exists():
 
     @app.get("/{path:path}")
     async def spa(path: str) -> FileResponse:
-        candidate = frontend / path
-        if candidate.is_file():
+        """Serve the client-side router shell for any non-API path.
+
+        The frontend uses real (history) URLs, so a deep link such as
+        ``/history`` must return ``index.html`` instead of 404. Unknown
+        ``/api/...`` paths are excluded: they must answer with a JSON 404 so a
+        mistyped endpoint stays debuggable instead of quietly rendering HTML.
+        """
+        if path == "api" or path.startswith("api/"):
+            raise HTTPException(status_code=404, detail="not found")
+        candidate = (frontend / path).resolve()
+        if candidate.is_file() and candidate.is_relative_to(frontend):
             return FileResponse(candidate)
-        return FileResponse(frontend / "index.html")
+        # Never let the shell be cached: it points at hashed asset filenames
+        # that change on every deploy.
+        return FileResponse(frontend / "index.html", headers={"Cache-Control": "no-store"})

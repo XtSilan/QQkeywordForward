@@ -32,13 +32,17 @@ async def _apply_once(settings: Settings, client: NapCatClient) -> None:
             "reconnectInterval": 5000,
         }
         clients.append(item)
-    # Only push when missing or mismatched; avoids fighting a user who manually
-    # customised other fields in the NapCat WebUI.
-    if item.get("url") != settings.onebot_ws_url or not item.get("enable"):
+    # Push whenever url / enable / token drift from the environment, which is
+    # the single source of truth now that the WebUI form is gone. Other fields
+    # are left alone so a hand-tuned NapCat config is not clobbered.
+    if (
+        item.get("url") != settings.onebot_ws_url
+        or not item.get("enable")
+        or item.get("token", "") != settings.onebot_access_token
+    ):
         item["enable"] = True
         item["url"] = settings.onebot_ws_url
-        if settings.onebot_access_token:
-            item["token"] = settings.onebot_access_token
+        item["token"] = settings.onebot_access_token
         await client.set_onebot_config(config)
 
 

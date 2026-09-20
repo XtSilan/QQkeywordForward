@@ -15,12 +15,3 @@ class SmtpSettingsPayload(BaseModel):
 class DuplicateMessageSettingsPayload(BaseModel):
     threshold: int = Field(default=2, ge=2, le=100)
     cooldown_minutes: int = Field(default=10, ge=1, le=1440)
-
-
-class OneBotWebsocketPayload(BaseModel):
-    enable: bool = False
-    url: str = Field(min_length=1, max_length=1000)
-    reconnectInterval: int = Field(default=5000, ge=100, le=3600000)
-    heartInterval: int = Field(default=30000, ge=1000, le=3600000)
-    verifyCertificate: bool = True
-    token: str | None = Field(default=None, max_length=500)

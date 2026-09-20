@@ -123,7 +123,7 @@ CREATE TABLE IF NOT EXISTS broadcast_tasks (
   id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
   message_json TEXT NOT NULL,
-  interval_seconds INTEGER NOT NULL CHECK(interval_seconds >= 5),
+  interval_seconds INTEGER NOT NULL CHECK(interval_seconds >= 1),
   group_cooldown_seconds INTEGER NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'draft',
   total_count INTEGER NOT NULL DEFAULT 0,

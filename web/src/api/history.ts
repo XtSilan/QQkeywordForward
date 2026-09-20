@@ -1,7 +1,12 @@
-import type { HistoryItem } from "../types/api";
+import type { HistoryList } from "../types/api";
 import { apiJson } from "./client";
 
-export function listHistory(groupId?: string, limit = 100): Promise<{ items: HistoryItem[]; total: number }> {
-  const query = groupId ? `&group_id=${encodeURIComponent(groupId)}` : "";
-  return apiJson(`/api/history?limit=${limit}${query}`);
+export function listHistory(
+  groupId: string | undefined,
+  limit: number,
+  offset: number,
+): Promise<HistoryList> {
+  const params = new URLSearchParams({ limit: String(limit), offset: String(offset) });
+  if (groupId) params.set("group_id", groupId);
+  return apiJson(`/api/history?${params.toString()}`);
 }

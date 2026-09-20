@@ -3,13 +3,11 @@ import { useEffect, useState } from "react";
 
 import {
   getDuplicateCoolingSettings,
-  getOneBotSettings,
   getSmtpSettings,
   saveDuplicateCoolingSettings,
-  saveOneBotSettings,
   saveSmtpSettings,
 } from "../api/settings";
-import type { DuplicateCoolingSettings, OneBotSettings, SmtpSettings } from "../types/api";
+import type { DuplicateCoolingSettings, SmtpSettings } from "../types/api";
 
 const DEFAULT_SMTP: SmtpSettings = {
   host: "",
@@ -22,29 +20,17 @@ const DEFAULT_SMTP: SmtpSettings = {
   timeout: 15,
 };
 
-const DEFAULT_ONEBOT: OneBotSettings = {
-  enable: false,
-  url: "",
-  reconnectInterval: 5000,
-  heartInterval: 30000,
-  verifyCertificate: true,
-  token: "",
-};
-
 const DEFAULT_COOLING: DuplicateCoolingSettings = { threshold: 2, cooldown_minutes: 10 };
 
 export function SystemSettingsPage({ onError }: { onError: (message: string) => void }) {
   const [smtp, setSmtp] = useState<SmtpSettings>(DEFAULT_SMTP);
-  const [onebot, setOnebot] = useState<OneBotSettings>(DEFAULT_ONEBOT);
   const [duplicateCooling, setDuplicateCooling] = useState<DuplicateCoolingSettings>(DEFAULT_COOLING);
 
   useEffect(() => {
-    void Promise.all([getSmtpSettings(), getOneBotSettings(), getDuplicateCoolingSettings()])
-      .then(([s, o, d]) => {
-        // Responses omit secrets (password/token); the spread keeps whatever the
-        // user has typed so far.
+    void Promise.all([getSmtpSettings(), getDuplicateCoolingSettings()])
+      .then(([s, d]) => {
+        // Responses omit secrets; the spread keeps whatever the user typed so far.
         setSmtp((value) => ({ ...value, ...s }));
-        setOnebot((value) => ({ ...value, ...(o.websocket_client || {}) }));
         setDuplicateCooling((value) => ({ ...value, ...d }));
       })
       .catch((reason) => onError(reason instanceof Error ? reason.message : "设置读取失败"));
@@ -55,7 +41,7 @@ export function SystemSettingsPage({ onError }: { onError: (message: string) => 
       <div className="welcome-row">
         <div>
           <h2>系统设置</h2>
-          <p>重复消息降噪、SMTP 邮件和 NapCat OneBot 配置。</p>
+          <p>重复消息降噪和 SMTP 邮件配置。</p>
         </div>
       </div>
 
@@ -172,51 +158,6 @@ export function SystemSettingsPage({ onError }: { onError: (message: string) => 
             启用 STARTTLS
           </label>
           <button className="button primary">保存 SMTP</button>
-        </form>
-      </section>
-
-      <section className="panel form-panel settings-card">
-        <div className="panel-heading">
-          <div>
-            <div className="panel-kicker">ONEBOT</div>
-            <h3>反向 WebSocket</h3>
-          </div>
-          <span className="muted">保存后按需重启 NapCat</span>
-        </div>
-        <form
-          className="settings-form"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void saveOneBotSettings(onebot).catch((reason) =>
-              onError(reason instanceof Error ? reason.message : "保存失败"),
-            );
-          }}
-        >
-          <label className="check-field">
-            <input
-              type="checkbox"
-              checked={onebot.enable}
-              onChange={(event) => setOnebot({ ...onebot, enable: event.target.checked })}
-            />
-            启用连接
-          </label>
-          <label className="field field-wide">
-            <span>URL</span>
-            <input
-              value={onebot.url}
-              onChange={(event) => setOnebot({ ...onebot, url: event.target.value })}
-              placeholder="ws://nonebot:8081/onebot/v11/ws"
-            />
-          </label>
-          <label className="field">
-            <span>Token</span>
-            <input
-              type="password"
-              value={onebot.token}
-              onChange={(event) => setOnebot({ ...onebot, token: event.target.value })}
-            />
-          </label>
-          <button className="button primary">保存 OneBot 配置</button>
         </form>
       </section>
     </section>

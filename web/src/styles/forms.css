@@ -2,8 +2,17 @@
 
 .form-panel, .table-panel { padding: 20px; margin-top: 14px; }
 .keyword-form { display: grid; grid-template-columns: minmax(180px, .8fr) minmax(240px, 1.2fr) auto auto; align-items: end; gap: 12px; }
-.destination-form, .broadcast-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; gap: 12px; }
-.broadcast-form { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.destination-form { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); align-items: end; gap: 12px; }
+.broadcast-form { display: grid; gap: 16px; }
+.broadcast-form .field-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(120px, 170px); gap: 14px; }
+.broadcast-form .field-section { display: grid; gap: 9px; }
+.broadcast-form .form-footer { display: flex; justify-content: flex-end; padding-top: 16px; border-top: 1px solid #e4e4e7; }
+.field-label { color: #607086; font-size: 11px; font-weight: 600; }
+.image-upload { display: inline-flex; align-items: center; gap: 7px; min-height: 34px; padding: 0 12px; border: 1px dashed #d4d4d8; border-radius: 7px; color: #52525b; background: #fafafa; font-size: 12px; font-weight: 600; cursor: pointer; }
+.image-upload:hover { border-color: #a1a1aa; color: #18181b; background: #f4f4f5; }
+.image-upload input[type="file"] { display: none; }
+.image-preview { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.image-preview .message-image { margin: 0; }
 .field-wide { grid-column: span 2; }
 .group-settings { display: grid; grid-template-columns: minmax(200px, 1.2fr) repeat(2, auto) minmax(220px, 1.5fr) auto; align-items: end; gap: 12px; }
 .destination-checks { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 13px; min-height: 34px; }
@@ -37,6 +46,11 @@
 .inline-input input { width: 56px; min-height: 26px; padding: 0 6px; border: 1px solid #dce3eb; border-radius: 5px; font-size: 11px; }
 .table-panel { min-height: 190px; }
 .table-wrap { overflow-x: auto; }
+.pager { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
+.pager-actions { display: flex; gap: 6px; }
+.pager .button:disabled { cursor: not-allowed; }
+.progress-cell { min-width: 132px; }
+.progress-cell > span { display: block; margin-bottom: 6px; color: #59697d; font-size: 11px; }
 table { width: 100%; border-collapse: collapse; color: #3b4a5f; font-size: 12px; }
 th { padding: 0 10px 10px; color: #8995a4; font-size: 10px; font-weight: 700; letter-spacing: .03em; text-align: left; white-space: nowrap; }
 td { padding: 12px 10px; border-top: 1px solid #edf0f4; vertical-align: middle; }

@@ -6,7 +6,7 @@
   .quick-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .keyword-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .napcat-grid { grid-template-columns: 1fr; }
-  .destination-form, .broadcast-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .destination-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .field-wide { grid-column: span 2; }
   .group-settings { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
@@ -30,7 +30,8 @@
   .service-status { display: none; }
   .service-copy span { max-width: 180px; }
   .keyword-form { grid-template-columns: 1fr; }
-  .destination-form, .broadcast-form { grid-template-columns: 1fr; }
+  .destination-form { grid-template-columns: 1fr; }
+  .broadcast-form .field-row { grid-template-columns: 1fr; }
   .field-wide { grid-column: auto; }
   .group-settings { grid-template-columns: 1fr; }
 }

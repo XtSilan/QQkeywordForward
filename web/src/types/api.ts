@@ -50,6 +50,14 @@ export type HistoryItem = {
   notify_status: string;
 };
 
+/** One page of keyword hits, as returned by GET /api/history. */
+export type HistoryList = {
+  items: HistoryItem[];
+  total: number;
+  limit: number;
+  offset: number;
+};
+
 export type Destination = {
   id: number;
   kind: "qq" | "email";
@@ -97,19 +105,6 @@ export type SmtpSettings = {
 
 /** As returned by GET /api/settings/smtp (never includes the password). */
 export type SmtpSettingsResponse = Omit<SmtpSettings, "password"> & { password_configured?: boolean };
-
-export type OneBotSettings = {
-  enable: boolean;
-  url: string;
-  reconnectInterval: number;
-  heartInterval: number;
-  verifyCertificate: boolean;
-  token: string;
-};
-
-export type OneBotSettingsResponse = {
-  websocket_client: Omit<OneBotSettings, "token"> & { name?: string; token_configured?: boolean };
-};
 
 export type DuplicateCoolingSettings = {
   threshold: number;

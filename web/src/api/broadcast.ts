@@ -18,22 +18,14 @@ export function pauseBroadcastTask(id: string): Promise<unknown> {
   return apiJson(`/api/broadcast-tasks/${id}/pause`, { method: "POST" });
 }
 
-export function resumeBroadcastTask(id: string): Promise<unknown> {
-  return apiJson(`/api/broadcast-tasks/${id}/resume`, { method: "POST" });
+/** Resume a paused task, optionally re-tuning the group delay in the same call. */
+export function resumeBroadcastTask(id: string, intervalSeconds?: number): Promise<unknown> {
+  return apiJson(`/api/broadcast-tasks/${id}/resume`, {
+    method: "POST",
+    body: JSON.stringify({ interval_seconds: intervalSeconds ?? null }),
+  });
 }
 
 export function cancelBroadcastTask(id: string): Promise<unknown> {
   return apiJson(`/api/broadcast-tasks/${id}/cancel`, { method: "POST" });
-}
-
-/** Adjust the per-group delay (seconds) of a queued/running/paused task. */
-export function setBroadcastInterval(id: string, intervalSeconds: number): Promise<unknown> {
-  return apiJson(`/api/broadcast-tasks/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify({ interval_seconds: intervalSeconds }),
-  });
-}
-
-export function runBroadcastAction(id: string, action: "pause" | "resume" | "cancel"): Promise<unknown> {
-  return apiJson(`/api/broadcast-tasks/${id}/${action}`, { method: "POST" });
 }

@@ -18,7 +18,10 @@ from app.settings import get_settings
 
 
 GROUP_SYNC_INTERVAL_SECONDS = 300.0
-SEND_RATE_LIMIT_PER_MINUTE = 5
+# Account-safety ceiling across all tasks, not a per-task cadence. It is kept at
+# one send per second so the per-group delay (1-60s) is the knob that actually
+# paces a task; lower this if the QQ account runs into risk control.
+SEND_RATE_LIMIT_PER_MINUTE = 60
 
 _send_times: deque[float] = deque()
 _group_sync_at: float = 0.0
@@ -131,7 +134,14 @@ async def dispatch_broadcasts(bot: Bot) -> None:
             conn.execute("UPDATE broadcast_task_groups SET status='sent', sent_at=CURRENT_TIMESTAMP, message_id=? WHERE task_id=? AND group_id=?", (message_id, row["task_id"], row["group_id"]))
             conn.execute("UPDATE broadcast_tasks SET sent_count=sent_count+1 WHERE id=?", (row["task_id"],))
     with connection() as conn:
-        remaining = conn.execute("SELECT COUNT(*) AS count FROM broadcast_task_groups WHERE task_id=? AND status IN ('queued','sending')", (row["task_id"],)).fetchone()["count"]
+        # Anything not terminal still counts as outstanding, including groups a
+        # pause moved to 'paused'. Counting only queued/sending would finalise a
+        # task that was just paused with work left.
+        remaining = conn.execute(
+            "SELECT COUNT(*) AS count FROM broadcast_task_groups "
+            "WHERE task_id=? AND status NOT IN ('sent', 'failed', 'cancelled')",
+            (row["task_id"],),
+        ).fetchone()["count"]
         if remaining == 0:
             conn.execute("UPDATE broadcast_tasks SET status=CASE WHEN failed_count > 0 THEN 'completed_with_errors' ELSE 'completed' END, finished_at=CURRENT_TIMESTAMP WHERE id=?", (row["task_id"],))
 

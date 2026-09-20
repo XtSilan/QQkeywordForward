@@ -2,30 +2,44 @@ import { CheckCircle2, Send } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { listBroadcastTasks } from "../api/broadcast";
+import { useLiveSnapshot } from "../lib/live";
 import { BROADCAST_STATUS_LABEL, type BroadcastTask } from "../types/api";
 import { EmptyState } from "./EmptyState";
 import { StatCard } from "./StatCard";
-import { usePoll } from "../hooks/usePoll";
 
 /** Dashboard stat: how many tasks are queued or currently sending. */
 export function BroadcastCountCard() {
-  const [count, setCount] = useState("0");
-  useEffect(() => {
-    void listBroadcastTasks(200)
-      .then((tasks) =>
-        setCount(String(tasks.filter((task) => ["queued", "running"].includes(task.status)).length)),
-      )
-      .catch(() => undefined);
-  }, []);
-  return <StatCard icon={<Send size={18} />} label="群发任务" value={count} detail="排队或执行中" tone="violet" />;
-}
-
-/** Dashboard panel: recent broadcast tasks with a progress bar. */
-export function BroadcastActivity() {
+  const live = useLiveSnapshot();
   const [tasks, setTasks] = useState<BroadcastTask[]>([]);
 
-  const load = () => listBroadcastTasks(10).then(setTasks).catch(() => undefined);
-  usePoll(load, 8000);
+  useEffect(() => {
+    void listBroadcastTasks(200)
+      .then(setTasks)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (live) setTasks(live.tasks);
+  }, [live]);
+
+  const active = tasks.filter((task) => ["queued", "running"].includes(task.status)).length;
+  return <StatCard icon={<Send size={18} />} label="群发任务" value={String(active)} detail="排队或执行中" tone="violet" />;
+}
+
+/** Dashboard panel: recent broadcast tasks with a live progress bar. */
+export function BroadcastActivity() {
+  const live = useLiveSnapshot();
+  const [tasks, setTasks] = useState<BroadcastTask[]>([]);
+
+  useEffect(() => {
+    void listBroadcastTasks(10)
+      .then(setTasks)
+      .catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    if (live) setTasks(live.tasks.slice(0, 10));
+  }, [live]);
 
   if (!tasks.length) {
     return (
