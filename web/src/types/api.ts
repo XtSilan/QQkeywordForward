@@ -86,6 +86,24 @@ export type BroadcastTask = {
   created_at: string;
 };
 
+/** Per-group detail inside a broadcast task (from GET /api/broadcast-tasks/:id). */
+export type BroadcastTaskGroup = {
+  task_id: string;
+  group_id: string;
+  status: string;
+  scheduled_at: string;
+  sent_at: string | null;
+  message_id: string | null;
+  error_code: string | null;
+  error_text: string | null;
+  attempts: number;
+};
+
+export type BroadcastTaskDetail = BroadcastTask & {
+  message: MessageSegment[];
+  groups: BroadcastTaskGroup[];
+};
+
 export type MessageSegment = {
   type: "text" | "image";
   data: { text?: string; file?: string };

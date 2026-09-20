@@ -75,5 +75,18 @@
 .switch input:checked + span { background: #18181b; }
 .switch input:checked + span::after { transform: translateX(18px); }
 .settings-card { padding: 22px; }
+
+/* Broadcast failure detail modal */
+.fail-detail-overlay { position: fixed; z-index: 60; inset: 0; display: grid; place-items: center; padding: 16px; background: rgba(15, 23, 42, .24); backdrop-filter: blur(9px); }
+.fail-detail-panel { width: min(680px, calc(100vw - 32px)); max-height: calc(100vh - 64px); overflow: auto; padding: 24px; border: 1px solid #dedee3; border-radius: 16px; background: #f7f7f9; box-shadow: 0 24px 70px rgba(15, 23, 42, .2); }
+.fail-detail-header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.fail-detail-header h3 { font-size: 16px; letter-spacing: -.01em; margin: 0; }
+.fail-detail-body { overflow: auto; }
+.fail-detail-body > .muted { margin: 0 0 12px; }
+.fail-detail-table { width: 100%; border-collapse: collapse; font-size: 12px; }
+.fail-detail-table th { text-align: left; padding: 6px 8px; border-bottom: 2px solid #e4e4e7; color: #71717a; font-weight: 600; font-size: 11px; }
+.fail-detail-table td { padding: 6px 8px; border-bottom: 1px solid #f0f0f2; vertical-align: top; }
+.fail-detail-table tr:hover td { background: #f0f0f3; }
+.fail-reason { color: #b91c1c; max-width: 280px; word-break: break-word; }
 .settings-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
 .settings-form .field-wide { grid-column: 1 / -1; }

@@ -116,17 +116,27 @@ async def sync_groups(bot: Bot) -> None:
         return
     if not isinstance(groups, list):
         return
+    member_ids: set[str] = set()
     with connection() as conn:
         for group in groups:
             group_id = str(group.get("group_id", "")).strip()
             if not group_id:
                 continue
+            member_ids.add(group_id)
             name = str(group.get("group_name", ""))
             avatar = f"https://p.qlogo.cn/gh/{group_id}/{group_id}/100/"
             conn.execute(
                 "INSERT INTO groups(group_id, name, avatar_url, last_synced_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
                 "ON CONFLICT(group_id) DO UPDATE SET name=excluded.name, avatar_url=excluded.avatar_url, last_synced_at=CURRENT_TIMESTAMP",
                 (group_id, name, avatar),
+            )
+        # Bot 已不在的群自动标记禁用，群发时不会选中。
+        # 重新入群后需在面板手动启用，避免误发。
+        if member_ids:
+            ph = ",".join("?" for _ in member_ids)
+            conn.execute(
+                f"UPDATE groups SET enabled=0 WHERE group_id NOT IN ({ph})",
+                tuple(member_ids),
             )
 
 

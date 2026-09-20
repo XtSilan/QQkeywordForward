@@ -35,6 +35,8 @@
 .callout.warning { color: #92400e; background: #fef3c7; border: 1px solid #fde68a; }
 .callout.warning svg { color: #d97706; }
 .status-badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; line-height: 1.6; background: #eef2f7; color: #4b5b70; }
+.status-badge.clickable { cursor: pointer; text-decoration: underline dotted; }
+.status-badge.clickable:hover { filter: brightness(0.9); }
 .status-badge.status-queued { background: #e0f2fe; color: #1d4ed8; }
 .status-badge.status-running { background: #dcfce7; color: #15803d; }
 .status-badge.status-paused { background: #fef3c7; color: #b45309; }

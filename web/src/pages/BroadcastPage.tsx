@@ -4,6 +4,7 @@ import { useEffect, useState } from "react";
 import {
   cancelBroadcastTask,
   createBroadcastTask,
+  getBroadcastTask,
   listBroadcastTasks,
   pauseBroadcastTask,
   resumeBroadcastTask,
@@ -14,7 +15,13 @@ import { isBotOnline } from "../api/napcat";
 import { uploadImage } from "../api/ops";
 import { EmptyState } from "../components/EmptyState";
 import { GroupPicker } from "../components/GroupPicker";
-import { BROADCAST_STATUS_LABEL, type BroadcastTask, type Group, type MessageSegment } from "../types/api";
+import {
+  BROADCAST_STATUS_LABEL,
+  type BroadcastTask,
+  type BroadcastTaskDetail,
+  type Group,
+  type MessageSegment,
+} from "../types/api";
 import { usePoll } from "../hooks/usePoll";
 import { useLiveSnapshot } from "../lib/live";
 
@@ -44,6 +51,8 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
   const [loopTotal, setLoopTotal] = useState(DEFAULT_LOOP_TOTAL);
   const [loopInterval, setLoopInterval] = useState(DEFAULT_LOOP_INTERVAL_SECONDS);
   const [botOnline, setBotOnline] = useState<boolean | null>(null);
+  const [failDetail, setFailDetail] = useState<BroadcastTaskDetail | null>(null);
+  const [failDetailLoading, setFailDetailLoading] = useState(false);
 
   const load = async () => {
     try {
@@ -55,7 +64,7 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
 
   useEffect(() => {
     void load();
-    void listGroups().then(setGroupOptions).catch(() => undefined);
+    void listGroups().then((all) => setGroupOptions(all.filter((g) => g.enabled))).catch(() => undefined);
   }, []);
 
   // Progress arrives over the shared SSE stream, so the table ticks by itself.
@@ -84,6 +93,17 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
       await load();
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : "取消失败");
+    }
+  };
+
+  const openFailDetail = async (taskId: string) => {
+    setFailDetailLoading(true);
+    try {
+      setFailDetail(await getBroadcastTask(taskId));
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "加载失败详情出错");
+    } finally {
+      setFailDetailLoading(false);
     }
   };
 
@@ -337,7 +357,17 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
                         )}
                       </td>
                       <td>
-                        <span className={`status-badge status-${task.status}`}>
+                        <span
+                          className={`status-badge status-${task.status}${task.failed_count ? " clickable" : ""}`}
+                          onClick={task.failed_count ? () => void openFailDetail(task.id) : undefined}
+                          role={task.failed_count ? "button" : undefined}
+                          tabIndex={task.failed_count ? 0 : undefined}
+                          onKeyDown={
+                            task.failed_count
+                              ? (e) => { if (e.key === "Enter") void openFailDetail(task.id); }
+                              : undefined
+                          }
+                        >
                           {looping && task.status === "running"
                             ? "循环中"
                             : BROADCAST_STATUS_LABEL[task.status] || task.status}
@@ -386,8 +416,91 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
           </div>
         )}
       </section>
+
+      {failDetail && (
+        <FailDetailPanel
+          detail={failDetail}
+          loading={failDetailLoading}
+          onClose={() => setFailDetail(null)}
+          groupOptions={groupOptions}
+        />
+      )}
     </section>
   );
+}
+
+/** Modal showing per-group failure details for a broadcast task. */
+function FailDetailPanel({
+  detail,
+  loading,
+  onClose,
+  groupOptions,
+}: {
+  detail: BroadcastTaskDetail;
+  loading: boolean;
+  onClose: () => void;
+  groupOptions: Group[];
+}) {
+  const groupName = (gid: string) =>
+    groupOptions.find((g) => g.group_id === gid)?.name || gid;
+  const failed = detail.groups.filter((g) => g.status === "failed");
+
+  return (
+    <div className="fail-detail-overlay" onClick={onClose}>
+      <div className="fail-detail-panel" onClick={(e) => e.stopPropagation()}>
+        <div className="fail-detail-header">
+          <h3>失败详情 · {detail.title}</h3>
+          <button className="icon-button" onClick={onClose}>
+            <X size={18} />
+          </button>
+        </div>
+        {loading ? (
+          <p className="muted">加载中…</p>
+        ) : failed.length === 0 ? (
+          <p className="muted">没有失败的群。</p>
+        ) : (
+          <div className="fail-detail-body">
+            <p className="muted">
+              共 {detail.total_count} 个群，成功 {detail.sent_count}，失败{" "}
+              {detail.failed_count}。
+            </p>
+            <table className="fail-detail-table">
+              <thead>
+                <tr>
+                  <th>群名</th>
+                  <th>群 ID</th>
+                  <th>错误原因</th>
+                </tr>
+              </thead>
+              <tbody>
+                {failed.map((g) => (
+                  <tr key={g.group_id}>
+                    <td>{groupName(g.group_id)}</td>
+                    <td className="muted">{g.group_id}</td>
+                    <td className="fail-reason">
+                      {extractErrorMessage(g.error_text) || "未知错误"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/** Extract the human-readable QQ error from NapCat's nested error_text. */
+function extractErrorMessage(text: string | null): string {
+  if (!text) return "";
+  // NapCat wraps: "ActionFailed(..., message='EventChecker Failed: ... errMsg: "xxx"', ...)"
+  const match = text.match(/"errMsg":\s*"([^"]+)"/);
+  if (match) return match[1];
+  // Fallback: try message='...' pattern
+  const match2 = text.match(/message='([^']+)'/);
+  if (match2) return match2[1].slice(0, 120);
+  return text.slice(0, 120);
 }
 
 /**
