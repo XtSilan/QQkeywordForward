@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api", tags=["dashboard"], dependencies=[Depends(admi
 
 
 def _count(table: str, where: str = "1=1") -> int:
-    if table not in {"groups", "keyword_hits"}:
+    if table not in {"groups", "keyword_hits", "notification_jobs"}:
         raise ValueError("unsupported table")
     with connection() as conn:
         row = conn.execute(f"SELECT COUNT(*) AS count FROM {table} WHERE {where}").fetchone()
@@ -41,6 +41,13 @@ async def dashboard(
             "groups": _count("groups"),
             "keyword_hits_today": _count(
                 "keyword_hits", "hit_at >= datetime('now', 'start of day')"
+            ),
+            # Alert messages actually delivered today: one row per destination,
+            # so a hit fanned out to two destinations counts twice. sent_at is
+            # written by the dispatcher as CURRENT_TIMESTAMP (UTC).
+            "alerts_sent_today": _count(
+                "notification_jobs",
+                "status='sent' AND sent_at >= datetime('now', 'start of day')",
             ),
         },
     }

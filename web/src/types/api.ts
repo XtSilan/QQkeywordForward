@@ -13,7 +13,7 @@ export type Dashboard = {
   config_revision: number;
   napcat: NapCatStatus;
   nonebot: { service: string; config_reload: boolean };
-  stats?: { groups: number; keyword_hits_today: number };
+  stats?: { groups: number; keyword_hits_today: number; alerts_sent_today: number };
 };
 
 export type Group = {
