@@ -8,8 +8,9 @@ burst cannot trip account risk control:
   successes, capped at 1.0/s;
 - any failed QQ send (exception or an empty NapCat ``message_id``) halves the
   rate, floor 0.1/s, and pauses QQ sending for 60 seconds;
-- priority-0 alert jobs (现在/急) cost one token, everything else needs two
-  tokens in the bucket, so one token always stays reserved for urgent alerts.
+- priority-0 alert jobs (现在/急) cost one token, everything else costs two, so
+  P1 traffic runs at roughly half the nominal rate and never takes the last
+  token that an urgent alert may need.
 
 Alert jobs carry an expiry (5 min P0 / 15 min P1). Jobs that expire unsent are
 dropped and their orders return to the undelivered state, so the next repost
@@ -68,7 +69,7 @@ class AimdBucket:
         needed = 1.0 if priority == 0 else 2.0
         if self.tokens < needed:
             return False
-        self.tokens -= 1.0
+        self.tokens -= needed
         return True
 
     def on_success(self) -> None:

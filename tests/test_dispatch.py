@@ -197,11 +197,21 @@ def test_bucket_p1_keeps_one_token_reserved_for_p0():
     assert bucket.tokens == 0.5
 
 
+def test_bucket_p1_costs_two_tokens():
+    """P1 must pay two tokens, not merely gate on two: charging one doubles the
+    effective send rate and can trip QQ risk control."""
+    bucket = dispatch.AimdBucket(tokens=3.0)
+    assert bucket.try_acquire(100.0, priority=1) is True
+    assert abs(bucket.tokens - 1.0) < 1e-9
+    # only one token left -> a second P1 send must wait for a refill
+    assert bucket.try_acquire(100.0, priority=1) is False
+
+
 def test_bucket_refills_at_rate():
     bucket = dispatch.AimdBucket(tokens=0.0)
     bucket.try_acquire(100.0)  # anchors last_refill
     assert bucket.try_acquire(104.0, priority=1) is True  # 4s * 0.5/s = 2 tokens
-    assert abs(bucket.tokens - 1.0) < 1e-9
+    assert abs(bucket.tokens - 0.0) < 1e-9
 
 
 def test_bucket_failure_halves_rate_and_pauses():
