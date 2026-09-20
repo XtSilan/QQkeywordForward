@@ -74,6 +74,22 @@ def _migrate_keyword_sort_order(connection: sqlite3.Connection) -> None:
     connection.executescript(load_migration("004_keyword_sort_order.sql"))
 
 
+def _migrate_order_dedup(connection: sqlite3.Connection) -> None:
+    tables = {
+        row[0]
+        for row in connection.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('orders', 'msgs')"
+        ).fetchall()
+    }
+    job_columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(notification_jobs)").fetchall()
+    }
+    if {"orders", "msgs"} <= tables and "priority" in job_columns:
+        return
+    connection.executescript(load_migration("006_order_dedup.sql"))
+
+
 def init_db() -> None:
     settings = get_settings()
     Path(settings.database_path).parent.mkdir(parents=True, exist_ok=True)
@@ -83,6 +99,7 @@ def init_db() -> None:
         _migrate_broadcast_interval_floor(connection)
         _migrate_duplicate_message_cooldowns(connection)
         _migrate_keyword_sort_order(connection)
+        _migrate_order_dedup(connection)
         connection.execute(
             "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('config_revision', '1')"
         )

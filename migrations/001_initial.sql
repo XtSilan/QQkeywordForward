@@ -97,27 +97,8 @@ CREATE TABLE IF NOT EXISTS keyword_notification_bindings (
   PRIMARY KEY(keyword_id, destination_id)
 );
 
-CREATE TABLE IF NOT EXISTS keyword_message_cooldowns (
-  message_fingerprint TEXT PRIMARY KEY,
-  occurrence_count INTEGER NOT NULL DEFAULT 1,
-  last_seen_at REAL NOT NULL,
-  cooldown_until REAL
-);
-
-CREATE INDEX IF NOT EXISTS idx_keyword_message_cooldowns_until
-  ON keyword_message_cooldowns(cooldown_until);
-
-CREATE INDEX IF NOT EXISTS idx_keyword_message_cooldowns_seen
-  ON keyword_message_cooldowns(last_seen_at);
-
-CREATE TABLE IF NOT EXISTS sender_message_cooldowns (
-  sender_id TEXT PRIMARY KEY,
-  triggered_at REAL NOT NULL,
-  cooldown_until REAL NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_sender_message_cooldowns_until
-  ON sender_message_cooldowns(cooldown_until);
+-- Text/sender cooldown tables were removed by migrations/006_order_dedup.sql
+-- in favour of order-fingerprint dedup; existing databases drop them there.
 
 CREATE TABLE IF NOT EXISTS broadcast_tasks (
   id TEXT PRIMARY KEY,

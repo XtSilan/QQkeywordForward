@@ -1,20 +1,17 @@
-import asyncio
-import hashlib
 import json
 import re
-import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import nonebot
 from nonebot.adapters.onebot.v11 import Adapter, Bot, GroupMessageEvent, Message
-from nonebot.rule import to_me
 
 from app.db import connection, init_db
 from app.services import dispatch
+from app.services import orders as order_dedup
 from app.settings import get_settings
 
 
-_cooldown_cleanup_at: float = 0
+_msgs_cleanup_at: float = 0
 
 
 def message_text(message: Message) -> str:
@@ -26,114 +23,13 @@ def message_segments(message: Message) -> list[dict[str, object]]:
     return [{"type": segment.type, "data": dict(segment.data)} for segment in message]
 
 
-def _duplicate_cooling_settings(conn) -> tuple[int, int]:
-    rows = conn.execute(
-        "SELECT key, value FROM app_meta WHERE key IN "
-        "('duplicate_message_threshold', 'duplicate_message_cooldown_seconds')"
-    ).fetchall()
-    values = {str(row["key"]): str(row["value"]) for row in rows}
-    try:
-        threshold = max(2, int(values.get("duplicate_message_threshold", "2")))
-        cooldown_seconds = max(
-            60, int(values.get("duplicate_message_cooldown_seconds", "600"))
-        )
-    except ValueError:
-        return 2, 600
-    return threshold, cooldown_seconds
-
-
-def _should_suppress_duplicate(
-    conn, text: str, threshold: int, cooldown_seconds: int, now: float
-) -> bool:
-    normalized = unicodedata.normalize("NFKC", text).casefold()
-    normalized = "".join(
-        character
-        for character in normalized
-        if not character.isspace() and unicodedata.category(character) != "Cf"
-    )
-    fingerprint = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
-    state = conn.execute(
-        "SELECT occurrence_count, last_seen_at, cooldown_until "
-        "FROM keyword_message_cooldowns WHERE message_fingerprint=?",
-        (fingerprint,),
-    ).fetchone()
-    if not state:
-        conn.execute(
-            "INSERT INTO keyword_message_cooldowns(message_fingerprint, occurrence_count, last_seen_at) "
-            "VALUES (?, 1, ?)",
-            (fingerprint, now),
-        )
-        return False
-
-    cooldown_until = float(state["cooldown_until"] or 0)
-    if cooldown_until > now:
-        conn.execute(
-            "UPDATE keyword_message_cooldowns SET last_seen_at=? "
-            "WHERE message_fingerprint=?",
-            (now, fingerprint),
-        )
-        return True
-
-    last_seen_at = float(state["last_seen_at"])
-    if cooldown_until or now - last_seen_at >= cooldown_seconds:
-        conn.execute(
-            "UPDATE keyword_message_cooldowns SET occurrence_count=1, last_seen_at=?, cooldown_until=NULL "
-            "WHERE message_fingerprint=?",
-            (now, fingerprint),
-        )
-        return False
-
-    occurrence_count = int(state["occurrence_count"]) + 1
-    enters_cooldown = occurrence_count >= threshold
-    conn.execute(
-        "UPDATE keyword_message_cooldowns SET occurrence_count=?, last_seen_at=?, cooldown_until=? "
-        "WHERE message_fingerprint=?",
-        (
-            occurrence_count,
-            now,
-            now + cooldown_seconds if enters_cooldown else None,
-            fingerprint,
-        ),
-    )
-    return enters_cooldown
-
-
-def _prune_duplicate_state(conn, now: float, cooldown_seconds: int) -> None:
-    global _cooldown_cleanup_at
-    if now - _cooldown_cleanup_at < 300:
+def _prune_msgs(conn, now: float) -> None:
+    """Bound the idempotency table; replays only matter for a short window."""
+    global _msgs_cleanup_at
+    if now - _msgs_cleanup_at < 300:
         return
-    conn.execute(
-        "DELETE FROM keyword_message_cooldowns WHERE last_seen_at < ?",
-        (now - cooldown_seconds,),
-    )
-    conn.execute(
-        "DELETE FROM sender_message_cooldowns WHERE cooldown_until <= ?", (now,)
-    )
-    _cooldown_cleanup_at = now
-
-
-def _sender_is_cooling(conn, sender_id: str, now: float) -> bool:
-    row = conn.execute(
-        "SELECT cooldown_until FROM sender_message_cooldowns WHERE sender_id=?",
-        (sender_id,),
-    ).fetchone()
-    if not row:
-        return False
-    if float(row["cooldown_until"]) > now:
-        return True
-    conn.execute("DELETE FROM sender_message_cooldowns WHERE sender_id=?", (sender_id,))
-    return False
-
-
-def _cooldown_sender(
-    conn, sender_id: str, now: float, cooldown_seconds: int
-) -> None:
-    conn.execute(
-        "INSERT INTO sender_message_cooldowns(sender_id, triggered_at, cooldown_until) "
-        "VALUES (?, ?, ?) ON CONFLICT(sender_id) DO UPDATE SET "
-        "triggered_at=excluded.triggered_at, cooldown_until=excluded.cooldown_until",
-        (sender_id, now, now + cooldown_seconds),
-    )
+    conn.execute("DELETE FROM msgs WHERE seen_at < ?", (now - 86400,))
+    _msgs_cleanup_at = now
 
 
 def run() -> None:
@@ -164,7 +60,15 @@ def run() -> None:
         if not text:
             return
         with connection() as conn:
-            duplicate_threshold, duplicate_cooldown_seconds = _duplicate_cooling_settings(conn)
+            now = datetime.now(timezone.utc)
+            now_ts = now.timestamp()
+            _prune_msgs(conn, now_ts)
+            cursor = conn.execute(
+                "INSERT OR IGNORE INTO msgs(gid, mid, seen_at) VALUES (?, ?, ?)",
+                (str(event.group_id), str(event.message_id), now_ts),
+            )
+            if cursor.rowcount == 0:
+                return  # NapCat reconnect replay of an already-seen message
             rows = conn.execute(
                 """
                 SELECT r.id, r.display_text, r.pattern, r.ignore_case,
@@ -190,39 +94,7 @@ def run() -> None:
             matched_keywords = list(
                 dict.fromkeys(str(row["display_text"]) for row in matched_rows)
             )
-            now = datetime.now(timezone.utc)
-            _prune_duplicate_state(
-                conn, now.timestamp(), duplicate_cooldown_seconds
-            )
             sender_id = str(event.user_id)
-            if _sender_is_cooling(conn, sender_id, now.timestamp()):
-                nonebot.logger.info(
-                    "sender_cooldown_suppressed group_id=%s user_id=%s message_id=%s",
-                    event.group_id,
-                    event.user_id,
-                    event.message_id,
-                )
-                return
-            if _should_suppress_duplicate(
-                conn,
-                text,
-                duplicate_threshold,
-                duplicate_cooldown_seconds,
-                now.timestamp(),
-            ):
-                _cooldown_sender(
-                    conn,
-                    sender_id,
-                    now.timestamp(),
-                    duplicate_cooldown_seconds,
-                )
-                nonebot.logger.info(
-                    "duplicate_message_suppressed group_id=%s user_id=%s message_id=%s",
-                    event.group_id,
-                    event.user_id,
-                    event.message_id,
-                )
-                return
             cursor = conn.execute(
                 """
                 INSERT INTO keyword_hits(
@@ -261,15 +133,52 @@ def run() -> None:
                     (row["id"], row["id"], str(event.group_id)),
                 ).fetchall()
                 destination_ids.update(int(item["id"]) for item in destinations)
-            for destination_id in destination_ids:
-                conn.execute(
-                    "INSERT OR IGNORE INTO notification_jobs(hit_id, destination_id) VALUES (?, ?)",
-                    (hit_id, destination_id),
-                )
+
+            dedup = order_dedup.load_settings(conn)
+            push_fps: set[str] = set()
+            if dedup.enabled:
+                lexicon = [
+                    str(r["display_text"])
+                    for r in conn.execute(
+                        "SELECT DISTINCT display_text FROM keyword_rules "
+                        "WHERE deleted_at IS NULL"
+                    ).fetchall()
+                ]
+                candidates = order_dedup.parse(text, lexicon, now_ts, dedup)
+                for cand in candidates:
+                    fp, action = order_dedup.decide(conn, cand, now_ts, dedup)
+                    if action == "push":
+                        push_fps.add(fp)
+            should_push = bool(push_fps) or not dedup.enabled
+            if should_push and destination_ids:
+                priority = 0 if re.search("现在|急", text) else 1
+                expires_at = (
+                    now + timedelta(seconds=300 if priority == 0 else 900)
+                ).isoformat()
+                for destination_id in destination_ids:
+                    conn.execute(
+                        "INSERT OR IGNORE INTO notification_jobs(hit_id, destination_id, priority, expires_at) "
+                        "VALUES (?, ?, ?, ?)",
+                        (hit_id, destination_id, priority, expires_at),
+                    )
+                for fp in push_fps:
+                    order_dedup.mark_sent(conn, fp, now_ts)
+            if should_push:
+                status = "queued" if destination_ids else "no_destination"
+            else:
+                status = "suppressed"
             conn.execute(
                 "UPDATE keyword_hits SET notify_status=? WHERE id=?",
-                ("queued" if destination_ids else "no_destination", hit_id),
+                (status, hit_id),
             )
+            if not should_push:
+                nonebot.logger.info(
+                    "order_dedup_%s group_id=%s user_id=%s message_id=%s",
+                    status,
+                    event.group_id,
+                    event.user_id,
+                    event.message_id,
+                )
         nonebot.logger.info(
             "keyword_hit group_id=%s user_id=%s message_id=%s",
             event.group_id,
