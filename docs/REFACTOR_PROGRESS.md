@@ -57,9 +57,13 @@ docs/                  # 设计文档（从根目录迁入）
   - [x] 验证：路由集合重构前后完全一致（54 → 54）；本地 venv + TestClient 跑通 20 项端点检查
   - 备注：本机 Docker Desktop 未运行，未执行 docker compose build；已用等价运行时验证替代
 
-- [ ] Phase 3：后端 services 拆分（app/services/*）
-  - [ ] dispatch_loop.py（从 nonebot_bot.py 抽出调度循环）
-  - [ ] napcat_sync.py（启动时自动应用 ws 配置）
+- [x] Phase 3：后端 services 拆分（app/services/*）
+  - [x] email.py（从 nonebot_bot 抽出 SMTP 发送，避免循环导入）
+  - [x] dispatch.py（调度循环：群同步 / 通知分发 / 群发分发 / 频率限制，含 start/stop 生命周期）
+  - [x] napcat_sync.py（main.py 的 _auto_apply_onebot_config 抽出；run_onebot_sync）
+  - [x] nonebot_bot.py 瘦身为 NoneBot 接线：472 → 284 行；main.py 102 行
+  - [x] api/notifications.py 改用 services.email
+  - [x] 验证：compileall + venv 下 dispatch 生命周期 / email config / napcat_sync import / nonebot_bot 委托 + API 全量回归通过
 
 - [ ] Phase 2：后端 repositories 拆分（app/repositories/*）
   - [ ] keyword_repo / broadcast_repo / group_repo / notification_repo

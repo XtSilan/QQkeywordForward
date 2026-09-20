@@ -27,8 +27,8 @@ from app.api import (
     uploads,
 )
 from app.db import connection, init_db
-from app.napcat import NapCatClient
-from app.settings import Settings, get_settings
+from app.services.napcat_sync import run_onebot_sync
+from app.settings import get_settings
 
 
 app = FastAPI(title="QQ Bot Control Plane", version="0.1.0")
@@ -67,40 +67,7 @@ async def startup() -> None:
     # Auto-push ONEBOT_WS_URL into NapCat once QQ is logged in so users don't
     # have to open the WebUI to wire up the reverse-WS client.
     if settings.onebot_ws_url:
-        asyncio.create_task(_auto_apply_onebot_config(settings))
-
-
-async def _auto_apply_onebot_config(settings: Settings) -> None:
-    client = NapCatClient(settings)
-    while True:
-        try:
-            status = await client.login_status()
-            if isinstance(status, dict) and status.get("isLogin"):
-                config = await client.onebot_config()
-                network = (config if isinstance(config, dict) else {}).setdefault("network", {})
-                clients = network.setdefault("websocketClients", [])
-                item = next((value for value in clients if value.get("name") == "websocket-client"), None)
-                if item is None:
-                    item = {
-                        "name": "websocket-client",
-                        "messagePostFormat": "array",
-                        "reportSelfMessage": False,
-                        "debug": False,
-                        "heartInterval": 30000,
-                        "reconnectInterval": 5000,
-                    }
-                    clients.append(item)
-                # Only push when missing or mismatched; avoids fighting a user
-                # who manually customised other fields in the NapCat WebUI.
-                if item.get("url") != settings.onebot_ws_url or not item.get("enable"):
-                    item["enable"] = True
-                    item["url"] = settings.onebot_ws_url
-                    if settings.onebot_access_token:
-                        item["token"] = settings.onebot_access_token
-                    await client.set_onebot_config(config)
-        except Exception:
-            pass
-        await asyncio.sleep(30)
+        asyncio.create_task(run_onebot_sync(settings))
 
 
 for router in (

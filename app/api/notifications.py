@@ -14,6 +14,7 @@ from app.schemas.notification import (
     NotificationConfigCreate,
     NotificationSettingsPayload,
 )
+from app.services.email import send_smtp_email
 from app.settings import Settings, get_settings
 
 
@@ -24,8 +25,6 @@ router = APIRouter(prefix="/api", tags=["notifications"], dependencies=[Depends(
 async def test_notification_email(
     payload: dict[str, str] = Body(...), settings: Settings = Depends(get_settings)
 ) -> dict[str, Any]:
-    from app.nonebot_bot import send_smtp_email
-
     address = str(payload.get("address", "")).strip()
     if "@" not in address:
         raise HTTPException(status_code=422, detail="invalid email address")
