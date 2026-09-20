@@ -90,16 +90,31 @@ def _migrate_order_dedup(connection: sqlite3.Connection) -> None:
     connection.executescript(load_migration("006_order_dedup.sql"))
 
 
+def _migrate_notification_order_fp(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute(
+            "PRAGMA table_info(notification_jobs)"
+        ).fetchall()
+    }
+    if "order_fp" in columns:
+        return
+    connection.executescript(load_migration("007_notification_order_fp.sql"))
+
+
 def init_db() -> None:
     settings = get_settings()
     Path(settings.database_path).parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(settings.database_path) as connection:
+        # WAL lets the dispatch worker read while the bot handler writes.
+        connection.execute("PRAGMA journal_mode = WAL")
         connection.executescript(load_migration("001_initial.sql"))
         _migrate_broadcast_interval(connection)
         _migrate_broadcast_interval_floor(connection)
         _migrate_duplicate_message_cooldowns(connection)
         _migrate_keyword_sort_order(connection)
         _migrate_order_dedup(connection)
+        _migrate_notification_order_fp(connection)
         connection.execute(
             "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('config_revision', '1')"
         )
@@ -127,6 +142,7 @@ def connection():
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA busy_timeout = 5000")
+    conn.execute("PRAGMA synchronous = NORMAL")
     try:
         yield conn
         conn.commit()

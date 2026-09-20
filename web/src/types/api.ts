@@ -127,6 +127,8 @@ export const NOTIFY_STATUS_LABEL: Record<string, string> = {
   pending: "待处理",
   queued: "排队中",
   sent: "已发送",
+  suppressed: "重复订单已抑制",
+  expired: "超时未送达",
   suppressed_cooldown: "重复消息已冷却",
   no_destination: "未配置提醒",
 };

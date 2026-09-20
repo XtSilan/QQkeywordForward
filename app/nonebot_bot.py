@@ -155,11 +155,14 @@ def run() -> None:
                 expires_at = (
                     now + timedelta(seconds=300 if priority == 0 else 900)
                 ).isoformat()
+                # Link jobs to their order fingerprints so the dispatcher can
+                # release undelivered orders when a job expires unsent.
+                fp_list = ",".join(sorted(push_fps))
                 for destination_id in destination_ids:
                     conn.execute(
-                        "INSERT OR IGNORE INTO notification_jobs(hit_id, destination_id, priority, expires_at) "
-                        "VALUES (?, ?, ?, ?)",
-                        (hit_id, destination_id, priority, expires_at),
+                        "INSERT OR IGNORE INTO notification_jobs(hit_id, destination_id, priority, expires_at, order_fp) "
+                        "VALUES (?, ?, ?, ?, ?)",
+                        (hit_id, destination_id, priority, expires_at, fp_list),
                     )
                 for fp in push_fps:
                     order_dedup.mark_sent(conn, fp, now_ts)
