@@ -1,7 +1,8 @@
-"""Application settings routes: duplicate-message cooling and SMTP.
+"""Application settings routes: order-dedup alerting and SMTP.
 
 HTTP/validation concerns only — the app_meta key/value access lives in
-``app.repositories.meta_repo``.
+``app.repositories.meta_repo`` and the parsing defaults in
+``app.services.orders``.
 
 The NapCat OneBot reverse-WebSocket config is intentionally absent: it is
 derived from ``ONEBOT_WS_URL`` / ``ONEBOT_ACCESS_TOKEN`` and pushed by
@@ -17,35 +18,47 @@ from app.api.deps import admin_guard
 from app.db import bump_config_revision, connection
 from app.repositories import meta_repo
 from app.schemas.settings import (
-    DuplicateMessageSettingsPayload,
+    AlertDedupSettingsPayload,
     SmtpSettingsPayload,
 )
+from app.services import orders as order_dedup
 from app.settings import Settings, get_settings
 
 
 router = APIRouter(prefix="/api/settings", tags=["settings"], dependencies=[Depends(admin_guard)])
 
 
-@router.get("/duplicate-message-cooling")
-def get_duplicate_message_cooling() -> dict[str, int]:
+@router.get("/order-dedup")
+def get_order_dedup_settings() -> dict[str, Any]:
     with connection() as conn:
-        values = meta_repo.get_many(
-            conn, ["duplicate_message_threshold", "duplicate_message_cooldown_seconds"]
-        )
+        dedup = order_dedup.load_settings(conn)
     return {
-        "threshold": int(values.get("duplicate_message_threshold", "2")),
-        "cooldown_minutes": max(
-            1, int(values.get("duplicate_message_cooldown_seconds", "600")) // 60
-        ),
+        "enabled": dedup.enabled,
+        "similarity": dedup.similarity,
+        "window_minutes": int(dedup.window_seconds // 60),
+        "max_push_per_order": dedup.max_push,
+        "new_phone_repush": dedup.new_phone_repush,
+        "ad_filter_enabled": dedup.ad_filter_enabled,
+        "ad_keywords": ",".join(dedup.ad_keywords),
     }
 
 
-@router.put("/duplicate-message-cooling")
-def put_duplicate_message_cooling(payload: DuplicateMessageSettingsPayload) -> dict[str, Any]:
+@router.put("/order-dedup")
+def put_order_dedup_settings(payload: AlertDedupSettingsPayload) -> dict[str, Any]:
+    ad_keywords = ",".join(
+        keyword.strip()
+        for keyword in payload.ad_keywords.replace("，", ",").split(",")
+        if keyword.strip()
+    )
     with connection() as conn:
         meta_repo.set_many(conn, {
-            "duplicate_message_threshold": str(payload.threshold),
-            "duplicate_message_cooldown_seconds": str(payload.cooldown_minutes * 60),
+            "alert_dedup_enabled": "1" if payload.enabled else "0",
+            "alert_similarity_threshold": str(payload.similarity),
+            "alert_order_window_minutes": str(payload.window_minutes),
+            "alert_max_push_per_order": str(payload.max_push_per_order),
+            "alert_new_phone_repush": "1" if payload.new_phone_repush else "0",
+            "alert_ad_filter_enabled": "1" if payload.ad_filter_enabled else "0",
+            "alert_ad_keywords": ad_keywords,
         })
     return {"saved": True, **payload.model_dump(), "revision": bump_config_revision()}
 

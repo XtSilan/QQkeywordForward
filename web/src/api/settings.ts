@@ -1,5 +1,5 @@
 import type {
-  DuplicateCoolingSettings,
+  OrderDedupSettings,
   SmtpSettings,
   SmtpSettingsResponse,
 } from "../types/api";
@@ -13,12 +13,12 @@ export function saveSmtpSettings(value: SmtpSettings): Promise<unknown> {
   return apiJson("/api/settings/smtp", { method: "PUT", body: JSON.stringify(value) });
 }
 
-export function getDuplicateCoolingSettings(): Promise<DuplicateCoolingSettings> {
-  return apiJson<DuplicateCoolingSettings>("/api/settings/duplicate-message-cooling");
+export function getOrderDedupSettings(): Promise<OrderDedupSettings> {
+  return apiJson<OrderDedupSettings>("/api/settings/order-dedup");
 }
 
-export function saveDuplicateCoolingSettings(value: DuplicateCoolingSettings): Promise<unknown> {
-  return apiJson("/api/settings/duplicate-message-cooling", {
+export function saveOrderDedupSettings(value: OrderDedupSettings): Promise<unknown> {
+  return apiJson("/api/settings/order-dedup", {
     method: "PUT",
     body: JSON.stringify(value),
   });

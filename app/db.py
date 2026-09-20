@@ -118,20 +118,6 @@ def init_db() -> None:
         connection.execute(
             "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('config_revision', '1')"
         )
-        connection.execute(
-            "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('duplicate_message_threshold', '2')"
-        )
-        connection.execute(
-            "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('duplicate_message_cooldown_seconds', '600')"
-        )
-        default_upgrade = connection.execute(
-            "INSERT OR IGNORE INTO app_meta(key, value) "
-            "VALUES ('duplicate_message_filter_defaults_v2', 'applied')"
-        )
-        if default_upgrade.rowcount:
-            connection.execute(
-                "UPDATE app_meta SET value='2' WHERE key='duplicate_message_threshold'"
-            )
         connection.commit()
 
 

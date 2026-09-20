@@ -12,6 +12,13 @@ class SmtpSettingsPayload(BaseModel):
     timeout: int = Field(default=15, ge=1, le=120)
 
 
-class DuplicateMessageSettingsPayload(BaseModel):
-    threshold: int = Field(default=2, ge=2, le=100)
-    cooldown_minutes: int = Field(default=10, ge=1, le=1440)
+class AlertDedupSettingsPayload(BaseModel):
+    """Order-fingerprint dedup knobs consumed by ``app.services.orders``."""
+
+    enabled: bool = True
+    similarity: float = Field(default=0.8, ge=0.1, le=1.0)
+    window_minutes: int = Field(default=60, ge=1, le=1440)
+    max_push_per_order: int = Field(default=2, ge=1, le=10)
+    new_phone_repush: bool = True
+    ad_filter_enabled: bool = True
+    ad_keywords: str = Field(default="", max_length=500)

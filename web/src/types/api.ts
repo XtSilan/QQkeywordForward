@@ -106,9 +106,14 @@ export type SmtpSettings = {
 /** As returned by GET /api/settings/smtp (never includes the password). */
 export type SmtpSettingsResponse = Omit<SmtpSettings, "password"> & { password_configured?: boolean };
 
-export type DuplicateCoolingSettings = {
-  threshold: number;
-  cooldown_minutes: number;
+export type OrderDedupSettings = {
+  enabled: boolean;
+  similarity: number;
+  window_minutes: number;
+  max_push_per_order: number;
+  new_phone_repush: boolean;
+  ad_filter_enabled: boolean;
+  ad_keywords: string;
 };
 
 /** Human-readable labels for broadcast task statuses. */
