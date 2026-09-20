@@ -9,7 +9,7 @@
 - 群发任务、任务进度、发送限速和群间延时
 - 文本换行以及 JPG/PNG/GIF/WEBP 图片上传群发
 - NoneBot 自动同步 OneBot 群列表
-- WebUI 配置 NapCat OneBot 反向 WebSocket
+- 按环境变量自动配置 NapCat OneBot 反向 WebSocket 与鉴权 token
 - NapCat 二维码登录、状态、重启和日志查看
 - 管理员会话认证、Bearer API 兼容和审计日志
 - SQLite WAL 数据库，数据通过宿主机目录持久化
@@ -50,9 +50,10 @@ AUTH_SESSION_TTL=86400
 NAPCAT_WEBUI_URL=http://napcat:6099
 NAPCAT_WEBUI_TOKEN=NapCat-WebUI-token
 
-# OneBot V11 token（可留空）
+# OneBot V11 鉴权 token（两组必须填相同值，留空则不做鉴权）
 ONEBOT_ACCESS_TOKEN=
-ONEBOT_WS_URL=ws://napcat:3001
+ONEBOT_V11_ACCESS_TOKEN=
+ONEBOT_WS_URL=ws://nonebot:8081/onebot/v11/ws
 
 # SMTP（不需要邮件时可留空）
 SMTP_HOST=smtp.example.com
@@ -113,13 +114,21 @@ docker compose logs -f --tail=200 napcat
 
 ### OneBot 反向 WebSocket
 
-登录 NapCat 后，在 WebUI“系统设置”中启用反向连接，URL 填写：
+反向 WS 由环境变量驱动，不需要在 WebUI 里手工配置。WebUI 容器启动后会跑一个后台同步任务：等 NapCat 登录完成后，每 30 秒检查一次 OneBot 配置，把名为 `websocket-client` 的条目对齐到：
 
 ```text
-ws://nonebot:8081/onebot/v11/ws
+url   = ONEBOT_WS_URL      （默认 ws://nonebot:8081/onebot/v11/ws）
+token = ONEBOT_ACCESS_TOKEN
 ```
 
-WebUI 会调用 NapCat 的 `/api/OB11Config/GetConfig` 和 `/api/OB11Config/SetConfig`，只修改反向 WS 的受控字段。保存后按页面提示重启 NapCat。
+只在 `url` / `enable` / `token` 与上述值不一致时才写回，其余字段（如 `reconnectInterval`）保持不动。因此改这两项后不需要手动改 NapCat，只要重启 webui 容器即可生效。
+
+鉴权 token 需要**两个变量填相同的值**，因为两侧读的是不同的环境变量：
+
+- `ONEBOT_ACCESS_TOKEN`：由 WebUI 下发给 NapCat，NapCat 用它作为 `Authorization: Bearer` 头发起连接
+- `ONEBOT_V11_ACCESS_TOKEN`：NoneBot 的 OneBot V11 适配器用它校验入站连接
+
+两者都留空则不校验，任何能访问 8081 端口的客户端都能连上来。只填其中一个会导致连接失败（适配器有值而 NapCat 没带 token，会返回 403）。
 
 ### 群列表同步
 

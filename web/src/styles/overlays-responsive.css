@@ -1,0 +1,12 @@
+/* Narrow-viewport adjustments for the modal and list layouts. */
+
+@media (max-width: 640px) {
+  .wizard-card { padding: 20px; border-radius: 14px; }
+  .wizard-actions { bottom: -20px; margin: 20px -20px -20px; padding: 13px 20px 17px; }
+  .channel-grid, .channel-fields, .settings-form { grid-template-columns: 1fr; }
+  .inline-destination-form { grid-template-columns: 1fr; }
+  .inline-destination-form .destination-note { grid-column: auto; }
+  .settings-form .field-wide { grid-column: auto; }
+  .keyword-row, .reminder-row { align-items: flex-start; flex-wrap: wrap; }
+  .keyword-row .switch, .reminder-row .switch { margin-left: auto; }
+}
