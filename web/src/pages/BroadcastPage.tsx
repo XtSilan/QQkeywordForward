@@ -561,13 +561,13 @@ function TaskActions({
           />
           秒
         </label>
+        {loopControl}
         <button
           className="button primary compact-button"
           onClick={() => void onResumeWithDelay(task.id, delay)}
         >
           确定并继续
         </button>
-        {loopControl}
         <button className="button danger compact-button" onClick={() => void onCancel(task.id)}>
           取消
         </button>
