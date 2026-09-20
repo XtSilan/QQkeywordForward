@@ -121,6 +121,47 @@ docs/                  # 设计文档（从根目录迁入）
 | style.css | 357 行单文件 | 9 个按层拆分的样式文件 |
 | 前端文件数 | 2 | 45 |
 
+## 历史记录性能修复 + 日期筛选（已完成）
+
+背景：历史列表接口每页都在做全表扫描。`WHERE (? IS NULL OR group_id=?)` 这种参数化 OR 无法被 SQLite 规划进索引（实测 `SCAN keyword_hits` + `USE TEMP B-TREE FOR ORDER BY`，**即使带了 group_id 也一样**）；`ORDER BY hit_at DESC` 没有对应索引；`COUNT(*)` 每页都单独跑一次。
+
+### 改动
+
+- [x] `migrations/008_history_indexes.sql`：`idx_keyword_hits_hit_at(hit_at DESC)`，并种子 `history_retention_days=0`
+- [x] `app/db.py`：`_migrate_history_indexes()` 守卫（检查索引是否已存在）+ 接入 `init_db`
+- [x] `app/repositories/history_repo.py`：`_where()` 动态拼 WHERE；`since`/`until` 走字符串范围比较；排序只用 `hit_at DESC`（加 `id DESC` 反而让"按群筛选"多出一次 `USE TEMP B-TREE FOR RIGHT PART OF ORDER BY`）；新增 `HIT_AT_FORMAT` + `storage_timestamp()` 统一时间戳形状
+- [x] `app/api/history.py`：新增可选 `since`/`until`（datetime，UTC 瞬时）；路由数不变
+- [x] `app/services/dispatch.py`：`_prune_history()` 挂进每小时清扫，按 `history_retention_days` 清理（**默认 0 = 不删任何数据**；删除 hit 前必须先删其 `notification_jobs`，否则外键 RESTRICT 会报错）
+- [x] `web/src/api/history.ts`：`listHistory({groupId, since, until, limit, offset})`
+- [x] `web/src/pages/HistoryPage.tsx`：日期筛选（URL 存 `?date=YYYY-MM-DD`，由浏览器把本地日历日换算成 `since`/`until`，所以"哪一天"按操作者本机时区算；不选=全部历史，`全部历史` 按钮同时清群聊与日期）+ 页码跳转框（配合既有 `?page=`）
+- [x] `web/src/styles/forms.css`：`.history-date` / `.pager-jump`
+- [x] `tests/test_history_api.py`（7 项）：无筛选排序、按本地日范围、边界形状归一（`Z` / `+00:00` / 裸时间）、群筛选与范围组合、关键词筛选+分页、非法 `since` 422、EXPLAIN 回归断言（三条查询都走索引且无 TEMP B-TREE）
+- [x] 验证：history 7/7、broadcast_loop 6/6、dispatch 21/21、order_dedup 7/7、settings 3/3；`tsc -b` + `vite build` 通过
+
+### 已验证的查询计划（新索引下）
+
+| 查询 | 计划 |
+|---|---|
+| 无筛选，`ORDER BY hit_at DESC` | `SCAN keyword_hits USING COVERING INDEX idx_keyword_hits_hit_at` |
+| `WHERE hit_at >= ? AND hit_at < ?` | `SEARCH ... USING COVERING INDEX idx_keyword_hits_hit_at` |
+| `WHERE group_id = ?` | `SEARCH ... USING COVERING INDEX idx_keyword_hits_group_time` |
+| 上述各筛选下的 `COUNT(*)` | 走索引，无临时排序 |
+
+## 群发任务自动循环（已完成）
+
+- [x] `migrations/009_broadcast_loop.sql`：`broadcast_tasks` 加 `loop_total`（总轮数，含首轮，0=不循环）/ `loop_current`（进行中的轮次，1-based）/ `loop_interval_seconds`（轮间隔）
+- [x] `app/repositories/broadcast_repo.py`：`create()` 写循环字段；`list_tasks`/`get_task` 返回 `round_sent`/`round_failed`（只统计进行中那一轮）；`start_next_round()` 重置并重排全部群行；`update_intervals()`
+- [x] `app/api/broadcast.py`：新增 `PUT /api/broadcast-tasks/{task_id}`——轮间隔随时可改；群间延时会影响已排定的队列，仍限制为暂停后（沿用原有约定）。**路由装饰器 51 → 52**
+- [x] `app/services/dispatch.py`：本轮跑完且 `loop_current < loop_total` → `start_next_round()`，否则照旧收尾
+- [x] 前端 `BroadcastPage.tsx`：创建表单加「自动循环发送」开关（勾选后展开循环次数/每轮间隔）；任务行显示 `循环 N 轮 · 轮间隔 M 秒`、状态显示"循环中"、进度显示 `第 X/Y 轮 · 本轮 N/M`（进度条按当前轮走）、操作列加轮间隔编辑器
+- [x] `tests/test_broadcast_loop.py`（6 项）+ `tests/test_dispatch.py` 两个轮次推进用例
+- 取舍：每轮开始会重置群行，因此上一轮的逐群明细会被覆盖（任务级 `sent_count` 累计值保留）；需要保留每轮明细就得再加轮次明细表
+
+## 线上运维记录
+
+- 2026-09-20 远程 `/opt/qq_bot_forward`（instance1）：`.env.prod` 的 `ONEBOT_WS_URL` 一直是默认值 `ws://napcat:3001`（NapCat 连自己容器的 3001），`napcat_sync` 每 30 秒把 env 值推进 NapCat，于是反向 WS 永久 `ECONNREFUSED`——现象是"更新后只推了一条消息"（那一条是配置被覆盖前 16 秒窗口里进来的）。已改为 `ws://nonebot:8081/onebot/v11/ws` 并重建 webui。**教训：`.env.prod` 必须显式覆盖 `ONEBOT_WS_URL` 与 `ONEBOT_ACCESS_TOKEN`，否则会退回 `app/settings.py` 的默认值。**
+- 远程只有 `docker-compose` v1.29.2，与新版 Docker 引擎不兼容（`KeyError: 'ContainerConfig'`），且没有 compose v2 插件。重建单个服务不要直接 `up --force-recreate`，改用：`docker-compose config -q` 校验 → `docker rm -f <container>` → `docker-compose up -d --no-deps <service>`。
+
 ## 执行规则
 - 每个 phase 完成后 docker compose build + health check 必须通过
 - 每个 phase 完成后建议 git commit（用户批准后）

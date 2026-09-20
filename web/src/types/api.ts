@@ -75,6 +75,14 @@ export type BroadcastTask = {
   sent_count: number;
   failed_count: number;
   interval_seconds: number;
+  /** Rounds including the first; 0 means the task never loops. */
+  loop_total: number;
+  /** Round in flight, 1-based (0 for a non-looping task). */
+  loop_current: number;
+  loop_interval_seconds: number;
+  /** Groups already sent/failed in the round currently in flight. */
+  round_sent: number;
+  round_failed: number;
   created_at: string;
 };
 

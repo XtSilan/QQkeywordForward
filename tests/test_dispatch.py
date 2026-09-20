@@ -82,6 +82,10 @@ def fresh_db() -> None:
         CREATE TABLE broadcast_tasks(
           id TEXT PRIMARY KEY, message_json TEXT NOT NULL,
           status TEXT NOT NULL DEFAULT 'queued',
+          interval_seconds INTEGER NOT NULL DEFAULT 2,
+          loop_total INTEGER NOT NULL DEFAULT 0,
+          loop_current INTEGER NOT NULL DEFAULT 0,
+          loop_interval_seconds INTEGER NOT NULL DEFAULT 60,
           sent_count INTEGER NOT NULL DEFAULT 0,
           failed_count INTEGER NOT NULL DEFAULT 0,
           started_at TEXT, finished_at TEXT);
@@ -431,6 +435,55 @@ def test_broadcast_exception_does_not_feed_bucket():
         ).fetchone()
     assert group["status"] == "failed"
     assert dispatch._bucket.rate == 0.5  # group-level failure, rate untouched
+
+
+def add_looping_task(loop_total: int, loop_current: int) -> None:
+    """One due group row on a running, auto-looping task."""
+    with dispatch.connection() as conn:
+        conn.execute(
+            "INSERT INTO broadcast_tasks(id, message_json, status, interval_seconds, loop_total, "
+            "loop_current, loop_interval_seconds) VALUES ('t1', '[]', 'running', 5, ?, ?, 60)",
+            (loop_total, loop_current),
+        )
+        conn.execute(
+            "INSERT INTO broadcast_task_groups(task_id, group_id, status, scheduled_at) "
+            "VALUES ('t1', '555', 'queued', ?)",
+            (iso_in(-1),),
+        )
+
+
+def test_broadcast_loop_queues_next_round_when_a_round_finishes():
+    setup_function()
+    add_looping_task(loop_total=3, loop_current=1)
+    asyncio.run(dispatch._work_once(FakeBot()))
+    with dispatch.connection() as conn:
+        task = conn.execute(
+            "SELECT status, loop_current FROM broadcast_tasks WHERE id='t1'"
+        ).fetchone()
+        row = conn.execute(
+            "SELECT status, scheduled_at, attempts FROM broadcast_task_groups WHERE task_id='t1'"
+        ).fetchone()
+    assert task["status"] == "running"
+    assert task["loop_current"] == 2          # the next round is now in flight
+    assert row["status"] == "queued" and row["attempts"] == 0
+    # ...and it waits out the round gap before sending again
+    assert row["scheduled_at"] > iso_in(50)
+
+
+def test_broadcast_loop_completes_after_the_last_round():
+    setup_function()
+    add_looping_task(loop_total=2, loop_current=2)
+    asyncio.run(dispatch._work_once(FakeBot()))
+    with dispatch.connection() as conn:
+        task = conn.execute(
+            "SELECT status, loop_current, finished_at FROM broadcast_tasks WHERE id='t1'"
+        ).fetchone()
+        row = conn.execute(
+            "SELECT status FROM broadcast_task_groups WHERE task_id='t1'"
+        ).fetchone()
+    assert task["status"] == "completed" and task["finished_at"] is not None
+    assert task["loop_current"] == 2          # no further round was started
+    assert row["status"] == "sent"
 
 
 def test_sweep_prunes_old_orders_and_requeues_orphans():

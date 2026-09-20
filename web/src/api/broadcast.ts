@@ -10,8 +10,25 @@ export function createBroadcastTask(payload: {
   group_ids: string[];
   message: MessageSegment[];
   interval_seconds: number;
+  /** 0 sends the schedule once. */
+  loop_total: number;
+  loop_interval_seconds: number;
 }): Promise<unknown> {
   return apiJson("/api/broadcast-tasks", { method: "POST", body: JSON.stringify(payload) });
+}
+
+/**
+ * Retune pacing. The round gap is accepted at any time; `interval_seconds`
+ * re-spaces already queued sends, so the backend only takes it while paused.
+ */
+export function updateBroadcastIntervals(
+  id: string,
+  payload: { interval_seconds?: number; loop_interval_seconds?: number },
+): Promise<unknown> {
+  return apiJson(`/api/broadcast-tasks/${id}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function pauseBroadcastTask(id: string): Promise<unknown> {

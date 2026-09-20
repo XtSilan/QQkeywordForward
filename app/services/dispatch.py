@@ -26,12 +26,13 @@ import json
 import sqlite3
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import nonebot
 from nonebot.adapters.onebot.v11 import Bot
 
 from app.db import connection
+from app.repositories import broadcast_repo, history_repo, meta_repo
 from app.services.email import send_smtp_email
 from app.settings import get_settings
 
@@ -40,6 +41,7 @@ GROUP_SYNC_INTERVAL_SECONDS = 300.0
 SWEEP_INTERVAL_SECONDS = 3600.0
 ORDERS_RETENTION_SECONDS = 7 * 86400
 CIRCUIT_BREAK_SECONDS = 60.0
+HISTORY_RETENTION_KEY = "history_retention_days"
 
 
 @dataclass
@@ -364,12 +366,32 @@ def _finish_broadcast(
             (row["task_id"],),
         ).fetchone()["count"]
         if remaining == 0:
-            conn.execute(
-                "UPDATE broadcast_tasks SET status=CASE WHEN failed_count > 0 "
-                "THEN 'completed_with_errors' ELSE 'completed' END, "
-                "finished_at=CURRENT_TIMESTAMP WHERE id=?",
+            task = conn.execute(
+                "SELECT status, loop_total, loop_current, interval_seconds, loop_interval_seconds "
+                "FROM broadcast_tasks WHERE id=?",
                 (row["task_id"],),
-            )
+            ).fetchone()
+            if (
+                task is not None
+                and task["status"] == "running"
+                and int(task["loop_current"]) < int(task["loop_total"])
+            ):
+                # Auto-loop: queue the next round instead of finishing. Every
+                # row lands in the future, so the task waits out the round gap
+                # before the next send.
+                broadcast_repo.start_next_round(
+                    conn,
+                    row["task_id"],
+                    int(task["interval_seconds"]),
+                    int(task["loop_interval_seconds"]),
+                )
+            else:
+                conn.execute(
+                    "UPDATE broadcast_tasks SET status=CASE WHEN failed_count > 0 "
+                    "THEN 'completed_with_errors' ELSE 'completed' END, "
+                    "finished_at=CURRENT_TIMESTAMP WHERE id=?",
+                    (row["task_id"],),
+                )
 
 
 async def _deliver_broadcast(bot: Bot, row: sqlite3.Row) -> None:
@@ -422,14 +444,42 @@ async def _work_once(bot: Bot) -> str:
     return "idle"
 
 
+def _prune_history(conn: sqlite3.Connection) -> None:
+    """Optional keyword_hits retention, off by default (0 = keep every hit).
+
+    Off by default on purpose: dropping hit rows also drops the notifications
+    they produced, which is an operator decision rather than a housekeeping
+    default.
+    """
+    raw = meta_repo.get(conn, HISTORY_RETENTION_KEY)
+    try:
+        days = int(raw or "0")
+    except ValueError:
+        days = 0
+    if days <= 0:
+        return
+    cutoff = history_repo.storage_timestamp(
+        datetime.now(timezone.utc) - timedelta(days=days)
+    )
+    # notification_jobs.hit_id is a plain foreign key, so its rows must go first.
+    conn.execute(
+        "DELETE FROM notification_jobs WHERE hit_id IN "
+        "(SELECT id FROM keyword_hits WHERE hit_at < ?)",
+        (cutoff,),
+    )
+    conn.execute("DELETE FROM keyword_hits WHERE hit_at < ?", (cutoff,))
+
+
 def _sweep() -> None:
-    """Hourly housekeeping: drop order rows far beyond the dedup window and
-    requeue jobs a crash left behind in 'sending'."""
+    """Hourly housekeeping: drop order rows far beyond the dedup window,
+    apply the optional history retention and requeue jobs a crash left behind
+    in 'sending'."""
     with connection() as conn:
         conn.execute(
             "DELETE FROM orders WHERE last_seen < ?",
             (time.time() - ORDERS_RETENTION_SECONDS,),
         )
+        _prune_history(conn)
         conn.execute(
             "UPDATE notification_jobs SET status='pending' WHERE status='sending'"
         )
