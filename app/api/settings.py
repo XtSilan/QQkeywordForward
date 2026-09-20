@@ -1,4 +1,8 @@
-"""Application settings routes: duplicate-message cooling, SMTP, OneBot WS."""
+"""Application settings routes: duplicate-message cooling, SMTP, OneBot WS.
+
+HTTP/validation concerns only — the app_meta key/value access lives in
+``app.repositories.meta_repo``.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -8,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.api.deps import admin_guard, napcat
 from app.db import bump_config_revision, connection
 from app.napcat import NapCatClient
+from app.repositories import meta_repo
 from app.schemas.settings import (
     DuplicateMessageSettingsPayload,
     OneBotWebsocketPayload,
@@ -22,11 +27,9 @@ router = APIRouter(prefix="/api/settings", tags=["settings"], dependencies=[Depe
 @router.get("/duplicate-message-cooling")
 def get_duplicate_message_cooling() -> dict[str, int]:
     with connection() as conn:
-        rows = conn.execute(
-            "SELECT key, value FROM app_meta WHERE key IN "
-            "('duplicate_message_threshold', 'duplicate_message_cooldown_seconds')"
-        ).fetchall()
-    values = {str(row["key"]): str(row["value"]) for row in rows}
+        values = meta_repo.get_many(
+            conn, ["duplicate_message_threshold", "duplicate_message_cooldown_seconds"]
+        )
     return {
         "threshold": int(values.get("duplicate_message_threshold", "2")),
         "cooldown_minutes": max(
@@ -37,24 +40,18 @@ def get_duplicate_message_cooling() -> dict[str, int]:
 
 @router.put("/duplicate-message-cooling")
 def put_duplicate_message_cooling(payload: DuplicateMessageSettingsPayload) -> dict[str, Any]:
-    values = {
-        "duplicate_message_threshold": str(payload.threshold),
-        "duplicate_message_cooldown_seconds": str(payload.cooldown_minutes * 60),
-    }
     with connection() as conn:
-        for key, value in values.items():
-            conn.execute(
-                "INSERT INTO app_meta(key, value) VALUES (?, ?) "
-                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, value),
-            )
+        meta_repo.set_many(conn, {
+            "duplicate_message_threshold": str(payload.threshold),
+            "duplicate_message_cooldown_seconds": str(payload.cooldown_minutes * 60),
+        })
     return {"saved": True, **payload.model_dump(), "revision": bump_config_revision()}
 
 
 @router.get("/smtp")
 def get_smtp_settings(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
     with connection() as conn:
-        overrides = {row["key"]: row["value"] for row in conn.execute("SELECT key, value FROM app_meta WHERE key LIKE 'smtp_%'")}
+        overrides = meta_repo.get_by_prefix(conn, "smtp_")
     return {
         "host": overrides.get("smtp_host", settings.smtp_host),
         "port": int(overrides.get("smtp_port", settings.smtp_port)),
@@ -78,11 +75,7 @@ def put_smtp_settings(payload: SmtpSettingsPayload) -> dict[str, Any]:
     if payload.password:
         values["smtp_password"] = payload.password
     with connection() as conn:
-        for key, value in values.items():
-            conn.execute(
-                "INSERT INTO app_meta(key, value) VALUES (?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                (key, value),
-            )
+        meta_repo.set_many(conn, values)
     return {"saved": True, "password_configured": bool(payload.password), "revision": bump_config_revision()}
 
 

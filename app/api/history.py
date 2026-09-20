@@ -5,8 +5,9 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query
 
-from app.api.deps import admin_guard, row_dict
+from app.api.deps import admin_guard
 from app.db import connection
+from app.repositories import history_repo
 
 
 router = APIRouter(prefix="/api", tags=["history"], dependencies=[Depends(admin_guard)])
@@ -20,16 +21,4 @@ def history(
     offset: int = Query(default=0, ge=0),
 ) -> dict[str, Any]:
     with connection() as conn:
-        rows = conn.execute(
-            "SELECT id, group_id, group_name, sender_id, sender_name, keyword_id, "
-            "keyword_text_snapshot, message_text, message_id, hit_at, notify_status "
-            "FROM keyword_hits WHERE (? IS NULL OR group_id=?) "
-            "AND (? IS NULL OR keyword_id=?) ORDER BY hit_at DESC LIMIT ? OFFSET ?",
-            (group_id, group_id, keyword_id, keyword_id, limit, offset),
-        ).fetchall()
-        total = conn.execute(
-            "SELECT COUNT(*) AS count FROM keyword_hits WHERE (? IS NULL OR group_id=?) "
-            "AND (? IS NULL OR keyword_id=?)",
-            (group_id, group_id, keyword_id, keyword_id),
-        ).fetchone()["count"]
-    return {"items": [row_dict(row) for row in rows], "total": int(total), "limit": limit, "offset": offset}
+        return history_repo.list_hits(conn, group_id, keyword_id, limit, offset)

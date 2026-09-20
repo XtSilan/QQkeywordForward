@@ -1,12 +1,17 @@
-"""Notification routes: destinations, configs, per-group settings and email test."""
+"""Notification routes: destinations, configs, per-group settings and email test.
+
+HTTP/validation concerns only — data access delegates to
+``app.repositories.notification_repo`` / ``group_repo``.
+"""
 from __future__ import annotations
 
 from typing import Any
 
 from fastapi import APIRouter, Body, Depends, HTTPException
 
-from app.api.deps import admin_guard, row_dict
+from app.api.deps import admin_guard
 from app.db import bump_config_revision, connection
+from app.repositories import group_repo, notification_repo
 from app.schemas.notification import (
     DestinationCreate,
     DestinationUpdate,
@@ -38,18 +43,7 @@ async def test_notification_email(
 @router.get("/destinations")
 def destinations() -> list[dict[str, Any]]:
     with connection() as conn:
-        rows = conn.execute(
-            "SELECT d.id, d.kind, d.address, d.display_name, d.enabled, d.created_at, "
-            "COALESCE(GROUP_CONCAT(b.group_id), '') AS group_ids_csv "
-            "FROM notification_destinations d LEFT JOIN notification_destination_bindings b "
-            "ON b.destination_id=d.id GROUP BY d.id ORDER BY d.kind, d.id DESC"
-        ).fetchall()
-    result = []
-    for row in rows:
-        item = row_dict(row)
-        item["group_ids"] = [value for value in item.pop("group_ids_csv", "").split(",") if value]
-        result.append(item)
-    return result
+        return notification_repo.list_destinations(conn)
 
 
 @router.post("/destinations")
@@ -59,15 +53,12 @@ def create_destination(payload: DestinationCreate) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="invalid email address")
     with connection() as conn:
         try:
-            cursor = conn.execute(
-                "INSERT INTO notification_destinations(kind, address, display_name) VALUES (?, ?, ?)",
-                (payload.kind, address, payload.display_name.strip()),
-            )
+            destination_id = notification_repo.insert(conn, payload.kind, address, payload.display_name.strip())
         except Exception as exc:
             if "UNIQUE constraint failed" in str(exc):
                 raise HTTPException(status_code=409, detail="destination already exists") from exc
             raise
-    return {"id": int(cursor.lastrowid), "revision": bump_config_revision()}
+    return {"id": destination_id, "revision": bump_config_revision()}
 
 
 @router.post("/notification-configs")
@@ -85,46 +76,22 @@ def create_notification_config(payload: NotificationConfigCreate) -> dict[str, A
                 raise HTTPException(status_code=422, detail="invalid QQ number")
             if channel.kind == "email" and ("@" not in address or " " in address):
                 raise HTTPException(status_code=422, detail="invalid email address")
-            existing = conn.execute(
-                "SELECT id FROM notification_destinations WHERE kind=? AND address=?",
-                (channel.kind, address),
-            ).fetchone()
+            existing = notification_repo.find_by_address(conn, channel.kind, address)
             if existing:
-                destination_id = int(existing["id"])
-                conn.execute(
-                    "UPDATE notification_destinations SET display_name=?, enabled=1 WHERE id=?",
-                    (channel.display_name.strip(), destination_id),
-                )
+                destination_id = existing
+                notification_repo.enable(conn, destination_id, channel.display_name.strip())
             else:
-                cursor = conn.execute(
-                    "INSERT INTO notification_destinations(kind, address, display_name) VALUES (?, ?, ?)",
-                    (channel.kind, address, channel.display_name.strip()),
-                )
-                destination_id = int(cursor.lastrowid)
+                destination_id = notification_repo.insert(conn, channel.kind, address, channel.display_name.strip())
             destination_ids.append(destination_id)
             for group_id in group_ids:
-                conn.execute("INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,))
-                conn.execute(
-                    "INSERT OR IGNORE INTO notification_destination_bindings(group_id, destination_id) VALUES (?, ?)",
-                    (group_id, destination_id),
-                )
+                group_repo.ensure_group(conn, group_id)
+                notification_repo.bind_group(conn, group_id, destination_id)
         # A newly-created reminder is immediately active for the selected
-        # channel types.  The dispatcher requires both a destination binding
-        # and the corresponding group-level switch to be enabled.
+        # channel types. The dispatcher requires both a destination binding and
+        # the corresponding group-level switch to be enabled.
         for group_id in group_ids:
-            conn.execute(
-                "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
-                "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET "
-                "qq_enabled=CASE WHEN ?=1 THEN 1 ELSE group_notification_settings.qq_enabled END, "
-                "email_enabled=CASE WHEN ?=1 THEN 1 ELSE group_notification_settings.email_enabled END, "
-                "updated_at=CURRENT_TIMESTAMP",
-                (
-                    group_id,
-                    int("qq" in channel_kinds),
-                    int("email" in channel_kinds),
-                    int("qq" in channel_kinds),
-                    int("email" in channel_kinds),
-                ),
+            group_repo.enable_channels(
+                conn, group_id, "qq" in channel_kinds, "email" in channel_kinds
             )
     return {"destination_ids": destination_ids, "group_ids": group_ids, "revision": bump_config_revision()}
 
@@ -138,119 +105,56 @@ def update_destination(destination_id: int, payload: DestinationUpdate) -> dict[
     if payload.kind == "qq" and not address.isdigit():
         raise HTTPException(status_code=422, detail="invalid QQ number")
     with connection() as conn:
-        previous_groups = [
-            str(row["group_id"])
-            for row in conn.execute(
-                "SELECT group_id FROM notification_destination_bindings WHERE destination_id=?",
-                (destination_id,),
-            ).fetchall()
-        ]
+        previous_groups = notification_repo.destination_groups(conn, destination_id)
         try:
-            cursor = conn.execute(
-                "UPDATE notification_destinations SET kind=?, address=?, display_name=?, enabled=? WHERE id=?",
-                (payload.kind, address, payload.display_name.strip(), int(payload.enabled), destination_id),
+            found = notification_repo.update(
+                conn, destination_id, payload.kind, address, payload.display_name.strip(), payload.enabled
             )
         except Exception as exc:
             if "UNIQUE constraint failed" in str(exc):
                 raise HTTPException(status_code=409, detail="destination already exists") from exc
             raise
-        if cursor.rowcount == 0:
+        if not found:
             raise HTTPException(status_code=404, detail="destination not found")
-        conn.execute("DELETE FROM notification_destination_bindings WHERE destination_id=?", (destination_id,))
+        notification_repo.clear_destination(conn, destination_id)
         for group_id in group_ids:
-            conn.execute("INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,))
-            conn.execute(
-                "INSERT OR IGNORE INTO notification_destination_bindings(group_id, destination_id) VALUES (?, ?)",
-                (group_id, destination_id),
-            )
-            conn.execute(
-                "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
-                "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET "
-                "qq_enabled=CASE WHEN ?=1 THEN 1 ELSE group_notification_settings.qq_enabled END, "
-                "email_enabled=CASE WHEN ?=1 THEN 1 ELSE group_notification_settings.email_enabled END, "
-                "updated_at=CURRENT_TIMESTAMP",
-                (
-                    group_id,
-                    int(payload.kind == "qq" and payload.enabled),
-                    int(payload.kind == "email" and payload.enabled),
-                    int(payload.kind == "qq" and payload.enabled),
-                    int(payload.kind == "email" and payload.enabled),
-                ),
+            group_repo.ensure_group(conn, group_id)
+            notification_repo.bind_group(conn, group_id, destination_id)
+            group_repo.enable_channels(
+                conn, group_id,
+                payload.kind == "qq" and payload.enabled,
+                payload.kind == "email" and payload.enabled,
             )
         # Recompute channel switches for both removed and newly-bound groups.
         # This avoids disabling a group-wide channel while another enabled
         # destination of the same type is still attached.
         for group_id in set(previous_groups) | set(group_ids):
-            conn.execute(
-                "INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,)
-            )
-            conn.execute(
-                "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
-                "VALUES (?, "
-                "EXISTS(SELECT 1 FROM notification_destination_bindings b "
-                "JOIN notification_destinations d ON d.id=b.destination_id "
-                "WHERE b.group_id=? AND d.kind='qq' AND d.enabled=1), "
-                "EXISTS(SELECT 1 FROM notification_destination_bindings b "
-                "JOIN notification_destinations d ON d.id=b.destination_id "
-                "WHERE b.group_id=? AND d.kind='email' AND d.enabled=1), CURRENT_TIMESTAMP) "
-                "ON CONFLICT(group_id) DO UPDATE SET qq_enabled=excluded.qq_enabled, "
-                "email_enabled=excluded.email_enabled, updated_at=CURRENT_TIMESTAMP",
-                (group_id, group_id, group_id),
-            )
+            group_repo.recompute_channels(conn, group_id)
     return {"updated": True, "revision": bump_config_revision()}
 
 
 @router.delete("/destinations/{destination_id}")
 def delete_destination(destination_id: int) -> dict[str, Any]:
     with connection() as conn:
-        group_ids = [
-            str(row["group_id"])
-            for row in conn.execute(
-                "SELECT group_id FROM notification_destination_bindings WHERE destination_id=?",
-                (destination_id,),
-            ).fetchall()
-        ]
-        # Remove dependent queue records explicitly because the existing
-        # SQLite schema intentionally keeps foreign-key enforcement enabled.
-        conn.execute("DELETE FROM notification_jobs WHERE destination_id=?", (destination_id,))
-        conn.execute("DELETE FROM keyword_notification_bindings WHERE destination_id=?", (destination_id,))
-        conn.execute("DELETE FROM notification_destination_bindings WHERE destination_id=?", (destination_id,))
-        cursor = conn.execute("DELETE FROM notification_destinations WHERE id=?", (destination_id,))
-        if cursor.rowcount == 0:
+        group_ids = notification_repo.destination_groups(conn, destination_id)
+        notification_repo.purge_references(conn, destination_id)
+        if not notification_repo.delete(conn, destination_id):
             raise HTTPException(status_code=404, detail="destination not found")
         for group_id in group_ids:
-            conn.execute(
-                "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
-                "VALUES (?, "
-                "EXISTS(SELECT 1 FROM notification_destination_bindings b "
-                "JOIN notification_destinations d ON d.id=b.destination_id "
-                "WHERE b.group_id=? AND d.kind='qq' AND d.enabled=1), "
-                "EXISTS(SELECT 1 FROM notification_destination_bindings b "
-                "JOIN notification_destinations d ON d.id=b.destination_id "
-                "WHERE b.group_id=? AND d.kind='email' AND d.enabled=1), CURRENT_TIMESTAMP) "
-                "ON CONFLICT(group_id) DO UPDATE SET qq_enabled=excluded.qq_enabled, "
-                "email_enabled=excluded.email_enabled, updated_at=CURRENT_TIMESTAMP",
-                (group_id, group_id, group_id),
-            )
+            group_repo.recompute_channels(conn, group_id)
     return {"deleted": True, "revision": bump_config_revision()}
 
 
 @router.get("/groups/{group_id}/notification-settings")
 def get_notification_settings(group_id: str) -> dict[str, Any]:
     with connection() as conn:
-        row = conn.execute(
-            "SELECT qq_enabled, email_enabled FROM group_notification_settings WHERE group_id=?",
-            (group_id,),
-        ).fetchone()
-        bindings = conn.execute(
-            "SELECT destination_id FROM notification_destination_bindings WHERE group_id=?",
-            (group_id,),
-        ).fetchall()
+        qq_enabled, email_enabled = group_repo.get_channels(conn, group_id)
+        destination_ids = notification_repo.group_destination_ids(conn, group_id)
     return {
         "group_id": group_id,
-        "qq_enabled": bool(row["qq_enabled"]) if row else False,
-        "email_enabled": bool(row["email_enabled"]) if row else False,
-        "destination_ids": [int(item["destination_id"]) for item in bindings],
+        "qq_enabled": qq_enabled,
+        "email_enabled": email_enabled,
+        "destination_ids": destination_ids,
     }
 
 
@@ -258,19 +162,10 @@ def get_notification_settings(group_id: str) -> dict[str, Any]:
 def put_notification_settings(group_id: str, payload: NotificationSettingsPayload) -> dict[str, Any]:
     destination_ids = list(dict.fromkeys(payload.destination_ids))
     with connection() as conn:
-        conn.execute("INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,))
-        conn.execute(
-            "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
-            "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET "
-            "qq_enabled=excluded.qq_enabled, email_enabled=excluded.email_enabled, updated_at=CURRENT_TIMESTAMP",
-            (group_id, int(payload.qq_enabled), int(payload.email_enabled)),
-        )
-        conn.execute("DELETE FROM notification_destination_bindings WHERE group_id=?", (group_id,))
+        group_repo.set_channels(conn, group_id, payload.qq_enabled, payload.email_enabled)
+        notification_repo.clear_group(conn, group_id)
         for destination_id in destination_ids:
-            conn.execute(
-                "INSERT INTO notification_destination_bindings(group_id, destination_id) VALUES (?, ?)",
-                (group_id, destination_id),
-            )
+            notification_repo.bind_group(conn, group_id, destination_id)
     return {"saved": True, "revision": bump_config_revision()}
 
 
@@ -282,17 +177,8 @@ def bulk_apply_notification_settings(payload: NotificationBulkApply) -> dict[str
     destination_ids = list(dict.fromkeys(payload.destination_ids))
     with connection() as conn:
         for group_id in group_ids:
-            conn.execute("INSERT OR IGNORE INTO groups(group_id) VALUES (?)", (group_id,))
-            conn.execute(
-                "INSERT INTO group_notification_settings(group_id, qq_enabled, email_enabled, updated_at) "
-                "VALUES (?, ?, ?, CURRENT_TIMESTAMP) ON CONFLICT(group_id) DO UPDATE SET "
-                "qq_enabled=excluded.qq_enabled, email_enabled=excluded.email_enabled, updated_at=CURRENT_TIMESTAMP",
-                (group_id, int(payload.qq_enabled), int(payload.email_enabled)),
-            )
-            conn.execute("DELETE FROM notification_destination_bindings WHERE group_id=?", (group_id,))
+            group_repo.set_channels(conn, group_id, payload.qq_enabled, payload.email_enabled)
+            notification_repo.clear_group(conn, group_id)
             for destination_id in destination_ids:
-                conn.execute(
-                    "INSERT OR IGNORE INTO notification_destination_bindings(group_id, destination_id) VALUES (?, ?)",
-                    (group_id, destination_id),
-                )
+                notification_repo.bind_group(conn, group_id, destination_id)
     return {"applied": len(group_ids), "revision": bump_config_revision()}

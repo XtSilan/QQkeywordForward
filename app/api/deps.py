@@ -4,7 +4,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import time
-from typing import Any
 
 from fastapi import Depends, Header, HTTPException, Request
 
@@ -30,10 +29,6 @@ def admin_guard(
 
 def napcat(settings: Settings = Depends(get_settings)) -> NapCatClient:
     return NapCatClient(settings)
-
-
-def row_dict(row: Any) -> dict[str, Any]:
-    return dict(row)
 
 
 def session_token(settings: Settings, timestamp: int | None = None) -> str:

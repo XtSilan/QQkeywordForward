@@ -65,11 +65,21 @@ docs/                  # 设计文档（从根目录迁入）
   - [x] api/notifications.py 改用 services.email
   - [x] 验证：compileall + venv 下 dispatch 生命周期 / email config / napcat_sync import / nonebot_bot 委托 + API 全量回归通过
 
-- [ ] Phase 2：后端 repositories 拆分（app/repositories/*）
-  - [ ] keyword_repo / broadcast_repo / group_repo / notification_repo
+- [x] Phase 2：后端 repositories 拆分（app/repositories/*）
+  - [x] keyword_repo / broadcast_repo / group_repo / notification_repo / meta_repo / history_repo / audit_repo
+  - [x] repo 函数接收 conn，事务边界由 api 层控制（保留多表写入原子性）
+  - [x] 消除重复 SQL：group_notification_settings 的 3 种 upsert 收敛到 group_repo
+  - [x] row_dict 下沉到 db.py（repo 不再依赖 api 层）
+  - [x] api/*.py 不再直接写 SQL；db.py 110 → 118 行
+  - [x] 验证：路由一致性 54==54 + 48 项行为断言（含级联重算、幂等、409/404/400 边界）全通过
 
-- [ ] Phase 5：后端迁移 SQL 文件化
-  - [ ] 002_keyword_sort_order.sql
+- [x] Phase 5：后端迁移 SQL 文件化
+  - [x] migrations/001_initial.sql（主 schema）
+  - [x] migrations/002_broadcast_interval.sql
+  - [x] migrations/003_duplicate_message_cooldowns.sql
+  - [x] migrations/004_keyword_sort_order.sql
+  - [x] db.py 新增 load_migration()，SCHEMA 常量删除；db.py 359 → 110 行
+  - [x] 验证：legacy DB 升级（interval≥12→≥5 / 去 keyword_id / 加 sort_order）+ 幂等性 + 全新库 schema 全通过
 
 - [ ] Phase 6：前端 types + api 层
   - [ ] types/keyword.ts broadcast.ts group.ts dashboard.ts napcat.ts auth.ts

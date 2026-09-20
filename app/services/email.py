@@ -10,6 +10,7 @@ import smtplib
 from email.message import EmailMessage
 
 from app.db import connection
+from app.repositories import meta_repo
 
 
 def _smtp_send(settings, recipient: str, subject: str, body: str) -> None:
@@ -40,8 +41,7 @@ def _smtp_config(settings) -> dict[str, object]:
     }
     try:
         with connection() as conn:
-            rows = conn.execute("SELECT key, value FROM app_meta WHERE key LIKE 'smtp_%'").fetchall()
-        mapping = {row["key"]: row["value"] for row in rows}
+            mapping = meta_repo.get_by_prefix(conn, "smtp_")
         for key, value in mapping.items():
             short = key.removeprefix("smtp_")
             if short in values:
