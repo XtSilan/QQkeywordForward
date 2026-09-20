@@ -102,6 +102,25 @@ def _migrate_notification_order_fp(connection: sqlite3.Connection) -> None:
     connection.executescript(load_migration("007_notification_order_fp.sql"))
 
 
+def _migrate_history_indexes(connection: sqlite3.Connection) -> None:
+    row = connection.execute(
+        "SELECT name FROM sqlite_master WHERE type='index' AND name='idx_keyword_hits_hit_at'"
+    ).fetchone()
+    if row:
+        return
+    connection.executescript(load_migration("008_history_indexes.sql"))
+
+
+def _migrate_broadcast_loop(connection: sqlite3.Connection) -> None:
+    columns = {
+        row[1]
+        for row in connection.execute("PRAGMA table_info(broadcast_tasks)").fetchall()
+    }
+    if "loop_total" in columns:
+        return
+    connection.executescript(load_migration("009_broadcast_loop.sql"))
+
+
 def init_db() -> None:
     settings = get_settings()
     Path(settings.database_path).parent.mkdir(parents=True, exist_ok=True)
@@ -115,6 +134,8 @@ def init_db() -> None:
         _migrate_keyword_sort_order(connection)
         _migrate_order_dedup(connection)
         _migrate_notification_order_fp(connection)
+        _migrate_history_indexes(connection)
+        _migrate_broadcast_loop(connection)
         connection.execute(
             "INSERT OR IGNORE INTO app_meta(key, value) VALUES ('config_revision', '1')"
         )

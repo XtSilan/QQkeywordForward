@@ -1,11 +1,13 @@
-"""Broadcast task routes: CRUD, cancel/pause/resume.
+"""Broadcast task routes: CRUD, cancel/pause/resume, interval retune.
 
 HTTP/validation concerns only — data access delegates to
 ``app.repositories.broadcast_repo``.
 
-Changing the group delay is deliberately only possible through ``resume``: a
-running task cannot be re-spaced mid-flight, which keeps the schedule the user
-sees identical to the schedule being executed.
+Changing the *group* delay re-spaces work that may already be scheduled, so it
+stays tied to a moment when nothing is in flight: either ``resume`` for a paused
+task or the ``PUT`` route below, which also only accepts it while paused. The
+round gap of an auto-looping task only decides when the next round starts, so it
+can be retuned at any time.
 """
 from __future__ import annotations
 
@@ -17,7 +19,11 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from app.api.deps import admin_guard
 from app.db import bump_config_revision, connection
 from app.repositories import broadcast_repo, group_repo
-from app.schemas.broadcast import BroadcastResumePayload, BroadcastTaskCreate
+from app.schemas.broadcast import (
+    BroadcastIntervalsPayload,
+    BroadcastResumePayload,
+    BroadcastTaskCreate,
+)
 
 
 router = APIRouter(
@@ -45,8 +51,15 @@ def create_broadcast_task(payload: BroadcastTaskCreate) -> dict[str, Any]:
         broadcast_repo.create(
             conn, task_id, payload.title.strip(), payload.message,
             payload.interval_seconds, payload.group_cooldown_seconds, group_ids,
+            payload.loop_total, payload.loop_interval_seconds,
         )
-    return {"id": task_id, "status": "queued", "total_count": len(group_ids), "revision": bump_config_revision()}
+    return {
+        "id": task_id,
+        "status": "queued",
+        "total_count": len(group_ids),
+        "loop_total": payload.loop_total,
+        "revision": bump_config_revision(),
+    }
 
 
 @router.get("/{task_id}")
@@ -94,3 +107,39 @@ def resume_broadcast_task(
         interval = payload.interval_seconds if payload and payload.interval_seconds else stored
         broadcast_repo.resume(conn, task_id, interval)
     return {"resumed": True, "interval_seconds": interval, "revision": bump_config_revision()}
+
+
+@router.put("/{task_id}")
+def update_broadcast_intervals(
+    task_id: str, payload: BroadcastIntervalsPayload
+) -> dict[str, Any]:
+    """Retune a task's pacing.
+
+    The round gap is accepted at any time; the group delay is not, because it
+    re-spaces sends that are already queued.
+    """
+    if payload.interval_seconds is None and payload.loop_interval_seconds is None:
+        raise HTTPException(status_code=422, detail="没有需要修改的间隔")
+    with connection() as conn:
+        task = broadcast_repo.intervals(conn, task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="task not found")
+        if payload.interval_seconds is not None and task["status"] != "paused":
+            raise HTTPException(status_code=409, detail="群间延时会影响已排定的队列，请先暂停任务")
+        broadcast_repo.update_intervals(
+            conn, task_id, payload.interval_seconds, payload.loop_interval_seconds
+        )
+    return {
+        "saved": True,
+        "interval_seconds": (
+            payload.interval_seconds
+            if payload.interval_seconds is not None
+            else task["interval_seconds"]
+        ),
+        "loop_interval_seconds": (
+            payload.loop_interval_seconds
+            if payload.loop_interval_seconds is not None
+            else task["loop_interval_seconds"]
+        ),
+        "revision": bump_config_revision(),
+    }

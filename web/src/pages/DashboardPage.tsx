@@ -1,6 +1,6 @@
 import { Activity, Bell, KeyRound, MessageSquareText, Send, ShieldCheck, Users } from "lucide-react";
 
-import { BroadcastActivity, BroadcastCountCard } from "../components/BroadcastActivity";
+import { BroadcastActivity } from "../components/BroadcastActivity";
 import { QuickAction } from "../components/QuickAction";
 import { ServiceRow } from "../components/ServiceRow";
 import { StatCard } from "../components/StatCard";
@@ -45,7 +45,13 @@ export function DashboardPage({
           detail="今日累计"
           tone="blue"
         />
-        <BroadcastCountCard />
+        <StatCard
+          icon={<Bell size={18} />}
+          label="今日已发送"
+          value={`${dashboard?.stats?.alerts_sent_today ?? 0} 条`}
+          detail="关键词提醒转发"
+          tone="violet"
+        />
         <StatCard
           icon={<Users size={18} />}
           label="配置群聊"

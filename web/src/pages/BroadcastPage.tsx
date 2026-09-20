@@ -1,7 +1,14 @@
 import { CircleAlert, ImagePlus, RefreshCw, Send, X } from "lucide-react";
 import { useEffect, useState } from "react";
 
-import { cancelBroadcastTask, createBroadcastTask, listBroadcastTasks, pauseBroadcastTask, resumeBroadcastTask } from "../api/broadcast";
+import {
+  cancelBroadcastTask,
+  createBroadcastTask,
+  listBroadcastTasks,
+  pauseBroadcastTask,
+  resumeBroadcastTask,
+  updateBroadcastIntervals,
+} from "../api/broadcast";
 import { listGroups } from "../api/groups";
 import { isBotOnline } from "../api/napcat";
 import { uploadImage } from "../api/ops";
@@ -17,6 +24,13 @@ const MAX_INTERVAL_SECONDS = 60;
 /** Prefilled delay; the floor is 1s but 2s is the safer everyday default. */
 const DEFAULT_INTERVAL_SECONDS = 2;
 
+/** Mirrors app/schemas/broadcast.py for the auto-loop controls. */
+const MIN_LOOP_INTERVAL_SECONDS = 5;
+const MAX_LOOP_INTERVAL_SECONDS = 86400;
+const MAX_LOOP_TOTAL = 50;
+const DEFAULT_LOOP_TOTAL = 3;
+const DEFAULT_LOOP_INTERVAL_SECONDS = 60;
+
 export function BroadcastPage({ onError }: { onError: (message: string) => void }) {
   const live = useLiveSnapshot();
   const [tasks, setTasks] = useState<BroadcastTask[]>([]);
@@ -26,6 +40,9 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
   const [images, setImages] = useState<string[]>([]);
   const [groupOptions, setGroupOptions] = useState<Group[]>([]);
   const [interval, setIntervalValue] = useState(DEFAULT_INTERVAL_SECONDS);
+  const [loopEnabled, setLoopEnabled] = useState(false);
+  const [loopTotal, setLoopTotal] = useState(DEFAULT_LOOP_TOTAL);
+  const [loopInterval, setLoopInterval] = useState(DEFAULT_LOOP_INTERVAL_SECONDS);
   const [botOnline, setBotOnline] = useState<boolean | null>(null);
 
   const load = async () => {
@@ -84,13 +101,34 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
     }
   };
 
+  /** The round gap can be retuned while running: it only gates the next round. */
+  const saveLoopInterval = async (id: string, seconds: number) => {
+    if (seconds < MIN_LOOP_INTERVAL_SECONDS || seconds > MAX_LOOP_INTERVAL_SECONDS) {
+      onError(`轮间隔需在 ${MIN_LOOP_INTERVAL_SECONDS}-${MAX_LOOP_INTERVAL_SECONDS} 秒之间`);
+      return;
+    }
+    try {
+      await updateBroadcastIntervals(id, { loop_interval_seconds: seconds });
+      await load();
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "轮间隔保存失败");
+    }
+  };
+
   const create = async (event: React.FormEvent) => {
     event.preventDefault();
     try {
       const segments: MessageSegment[] = [];
       if (message) segments.push({ type: "text", data: { text: message } });
       images.forEach((file) => segments.push({ type: "image", data: { file } }));
-      await createBroadcastTask({ title, group_ids: groups, message: segments, interval_seconds: interval });
+      await createBroadcastTask({
+        title,
+        group_ids: groups,
+        message: segments,
+        interval_seconds: interval,
+        loop_total: loopEnabled ? loopTotal : 0,
+        loop_interval_seconds: loopInterval,
+      });
       setTitle("");
       setGroups([]);
       setMessage("");
@@ -111,7 +149,7 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
       <div className="welcome-row">
         <div>
           <h2>群发任务</h2>
-          <p>按群间延时逐个发送；进度实时刷新，无需手动重载。</p>
+          <p>按群间延时逐个发送；可开启自动循环，进度实时刷新。</p>
         </div>
         <button className="button secondary" onClick={() => void load()}>
           <RefreshCw size={15} />
@@ -157,6 +195,42 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
               />
             </label>
           </div>
+
+          <label className="check-field">
+            <input
+              type="checkbox"
+              checked={loopEnabled}
+              onChange={(event) => setLoopEnabled(event.target.checked)}
+            />
+            自动循环发送
+          </label>
+
+          {loopEnabled && (
+            <div className="field-row">
+              <label className="field">
+                <span>循环次数（含首轮）</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={MAX_LOOP_TOTAL}
+                  value={loopTotal}
+                  onChange={(event) => setLoopTotal(Number(event.target.value))}
+                />
+                <small>1 轮等于不循环，上限 {MAX_LOOP_TOTAL} 轮。</small>
+              </label>
+              <label className="field">
+                <span>每轮间隔（秒）</span>
+                <input
+                  type="number"
+                  min={MIN_LOOP_INTERVAL_SECONDS}
+                  max={MAX_LOOP_INTERVAL_SECONDS}
+                  value={loopInterval}
+                  onChange={(event) => setLoopInterval(Number(event.target.value))}
+                />
+                <small>上一轮发完后，等多久开始下一轮。</small>
+              </label>
+            </div>
+          )}
 
           <div className="field-section">
             <span className="field-label">目标群聊</span>
@@ -243,26 +317,50 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
               </thead>
               <tbody>
                 {tasks.map((task) => {
+                  const looping = task.loop_total > 1;
+                  // A looping task shows round progress; the bar follows the
+                  // round in flight so it restarts instead of creeping to 100%.
+                  const doneInRound = looping ? task.round_sent : task.sent_count;
                   const percent = Math.min(
                     100,
-                    Math.round((task.sent_count / Math.max(task.total_count, 1)) * 100),
+                    Math.round((doneInRound / Math.max(task.total_count, 1)) * 100),
                   );
                   return (
                     <tr key={task.id}>
                       <td>
                         <strong>{task.title}</strong>
                         <small>{task.id.slice(0, 8)}</small>
+                        {looping && (
+                          <small className="muted">
+                            循环 {task.loop_total} 轮 · 轮间隔 {task.loop_interval_seconds} 秒
+                          </small>
+                        )}
                       </td>
                       <td>
                         <span className={`status-badge status-${task.status}`}>
-                          {BROADCAST_STATUS_LABEL[task.status] || task.status}
+                          {looping && task.status === "running"
+                            ? "循环中"
+                            : BROADCAST_STATUS_LABEL[task.status] || task.status}
                         </span>
                       </td>
                       <td className="progress-cell">
-                        <span>
-                          {task.sent_count}/{task.total_count}
-                          {task.failed_count ? ` · 失败 ${task.failed_count}` : ""}
-                        </span>
+                        {looping ? (
+                          <>
+                            <span>
+                              第 {task.loop_current}/{task.loop_total} 轮 · 本轮 {task.round_sent}/
+                              {task.total_count}
+                            </span>
+                            <small className="muted">
+                              累计 {task.sent_count} 条
+                              {task.failed_count ? ` · 失败 ${task.failed_count}` : ""}
+                            </small>
+                          </>
+                        ) : (
+                          <span>
+                            {task.sent_count}/{task.total_count}
+                            {task.failed_count ? ` · 失败 ${task.failed_count}` : ""}
+                          </span>
+                        )}
                         <div className="progress-bar">
                           <div className="progress-fill" style={{ width: `${percent}%` }} />
                         </div>
@@ -277,6 +375,7 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
                           onPause={pause}
                           onCancel={cancel}
                           onResumeWithDelay={resumeWithDelay}
+                          onSaveLoopInterval={saveLoopInterval}
                         />
                       </td>
                     </tr>
@@ -292,21 +391,34 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
 }
 
 /**
- * Row controls. Changing the delay is only offered on a paused task: you pause,
- * retune, then confirm, which resumes and re-spaces the remaining groups at once.
+ * Row controls. Changing the group delay is only offered on a paused task: you
+ * pause, retune, then confirm, which resumes and re-spaces the remaining groups
+ * at once. A looping task additionally gets a round-gap editor, which is safe
+ * while the task is still sending because it only gates the next round.
  */
 function TaskActions({
   task,
   onPause,
   onCancel,
   onResumeWithDelay,
+  onSaveLoopInterval,
 }: {
   task: BroadcastTask;
   onPause: (id: string) => Promise<void>;
   onCancel: (id: string) => Promise<void>;
   onResumeWithDelay: (id: string, seconds: number) => Promise<void>;
+  onSaveLoopInterval: (id: string, seconds: number) => Promise<void>;
 }) {
   const [delay, setDelay] = useState(task.interval_seconds);
+  const [loopDelay, setLoopDelay] = useState(task.loop_interval_seconds);
+  const loopControl =
+    task.loop_total > 1 ? (
+      <LoopIntervalControl
+        value={loopDelay}
+        onChange={setLoopDelay}
+        onSave={() => onSaveLoopInterval(task.id, loopDelay)}
+      />
+    ) : null;
 
   if (["queued", "running"].includes(task.status)) {
     return (
@@ -314,6 +426,7 @@ function TaskActions({
         <button className="button secondary compact-button" onClick={() => void onPause(task.id)}>
           暂停
         </button>
+        {loopControl}
         <button className="button danger compact-button" onClick={() => void onCancel(task.id)}>
           取消
         </button>
@@ -341,6 +454,7 @@ function TaskActions({
         >
           确定并继续
         </button>
+        {loopControl}
         <button className="button danger compact-button" onClick={() => void onCancel(task.id)}>
           取消
         </button>
@@ -349,4 +463,34 @@ function TaskActions({
   }
 
   return <span className="muted">—</span>;
+}
+
+/** Round-gap editor shared by the running and paused rows of a looping task. */
+function LoopIntervalControl({
+  value,
+  onChange,
+  onSave,
+}: {
+  value: number;
+  onChange: (seconds: number) => void;
+  onSave: () => Promise<void>;
+}) {
+  return (
+    <>
+      <label className="inline-input">
+        <span>轮间隔</span>
+        <input
+          type="number"
+          min={MIN_LOOP_INTERVAL_SECONDS}
+          max={MAX_LOOP_INTERVAL_SECONDS}
+          value={value}
+          onChange={(event) => onChange(Number(event.target.value))}
+        />
+        秒
+      </label>
+      <button className="button secondary compact-button" onClick={() => void onSave()}>
+        保存间隔
+      </button>
+    </>
+  );
 }

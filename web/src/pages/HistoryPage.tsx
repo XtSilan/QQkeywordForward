@@ -18,19 +18,42 @@ function readPage(raw: string | null): number {
   return Number.isInteger(parsed) && parsed > 1 ? parsed : 1;
 }
 
+/** The `YYYY-MM-DD` shape produced by `<input type="date">`. */
+const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+
+/** Read `?date=`; anything unusable means "the whole history". */
+function readDate(raw: string | null): string {
+  return raw && DATE_PATTERN.test(raw) ? raw : "";
+}
+
+/**
+ * UTC bounds covering the picked *local* calendar day. The API filters on UTC
+ * instants, so the browser's timezone is what decides where a day begins.
+ */
+function dayBounds(date: string): { since?: string; until?: string } {
+  if (!DATE_PATTERN.test(date)) return {};
+  const [year, month, day] = date.split("-").map(Number);
+  return {
+    since: new Date(year, month - 1, day).toISOString(),
+    until: new Date(year, month - 1, day + 1).toISOString(),
+  };
+}
+
 export function HistoryPage({ onError }: { onError: (message: string) => void }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const page = readPage(searchParams.get("page"));
+  const date = readDate(searchParams.get("date"));
   const live = useLiveSnapshot();
 
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [total, setTotal] = useState(0);
   const [groups, setGroups] = useState<Group[]>([]);
   const [selectedGroup, setSelectedGroup] = useState<string[]>([]);
+  const [pageDraft, setPageDraft] = useState(String(page));
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  /** Keep the page in the URL so back/forward and refreshes stay consistent. */
+  // Keep the page in the URL so back/forward and refreshes stay consistent.
   const goToPage = (next: number, replace = false) => {
     const params = new URLSearchParams(searchParams);
     if (next <= 1) params.delete("page");
@@ -40,7 +63,12 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
 
   const load = async () => {
     try {
-      const data = await listHistory(selectedGroup[0], PAGE_SIZE, (page - 1) * PAGE_SIZE);
+      const data = await listHistory({
+        groupId: selectedGroup[0],
+        ...dayBounds(date),
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      });
       setItems(data.items);
       setTotal(data.total);
     } catch (reason) {
@@ -56,7 +84,10 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
 
   useEffect(() => {
     void load();
-  }, [selectedGroup, page]);
+  }, [selectedGroup, page, date]);
+
+  // The jump box mirrors the page that is actually loaded.
+  useEffect(() => setPageDraft(String(page)), [page]);
 
   // A new hit changes the row count, so the current page is refetched.
   const liveHits = live?.hits.total;
@@ -76,6 +107,32 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
     goToPage(1, true);
   };
 
+  /** Picking a day drops back to page 1; clearing it restores the full list. */
+  const selectDate = (next: string) => {
+    const params = new URLSearchParams(searchParams);
+    if (next && DATE_PATTERN.test(next)) params.set("date", next);
+    else params.delete("date");
+    params.delete("page");
+    setSearchParams(params, { replace: true });
+  };
+
+  const clearFilters = () => {
+    setSelectedGroup([]);
+    const params = new URLSearchParams(searchParams);
+    params.delete("date");
+    params.delete("page");
+    setSearchParams(params, { replace: true });
+  };
+
+  const jumpToPage = () => {
+    const wanted = Number(pageDraft);
+    if (!Number.isFinite(wanted)) {
+      setPageDraft(String(page));
+      return;
+    }
+    goToPage(Math.min(Math.max(1, Math.trunc(wanted)), pageCount));
+  };
+
   return (
     <section className="content">
       <div className="welcome-row">
@@ -93,13 +150,26 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
         <div className="panel-heading">
           <div>
             <div className="panel-kicker">FILTER</div>
-            <h3>按群聊查看</h3>
+            <h3>筛选历史</h3>
           </div>
-          <button className="button ghost" onClick={() => selectGroup([])}>
-            全部群聊
+          <button className="button ghost" onClick={clearFilters}>
+            全部历史
           </button>
         </div>
         <GroupPicker groups={groups} selected={selectedGroup} onChange={selectGroup} single />
+        <div className="history-date">
+          <label className="field">
+            <span>按日期筛选</span>
+            <input
+              type="date"
+              value={date}
+              onChange={(event) => selectDate(event.target.value)}
+            />
+          </label>
+          <span className="muted">
+            {date ? `只显示 ${date} 当天的命中（按本机时区）` : "未选日期时显示全部历史"}
+          </span>
+        </div>
       </section>
 
       <section className="panel table-panel">
@@ -173,6 +243,23 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
                   <ChevronLeft size={15} />
                   上一页
                 </button>
+                <label className="pager-jump">
+                  <span>跳至</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={pageCount}
+                    value={pageDraft}
+                    onChange={(event) => setPageDraft(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        jumpToPage();
+                      }
+                    }}
+                  />
+                  <span>页</span>
+                </label>
                 <button
                   className="button ghost"
                   disabled={page >= pageCount}

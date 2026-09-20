@@ -1,30 +1,10 @@
-import { CheckCircle2, Send } from "lucide-react";
+import { CheckCircle2 } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { listBroadcastTasks } from "../api/broadcast";
 import { useLiveSnapshot } from "../lib/live";
 import { BROADCAST_STATUS_LABEL, type BroadcastTask } from "../types/api";
 import { EmptyState } from "./EmptyState";
-import { StatCard } from "./StatCard";
-
-/** Dashboard stat: how many tasks are queued or currently sending. */
-export function BroadcastCountCard() {
-  const live = useLiveSnapshot();
-  const [tasks, setTasks] = useState<BroadcastTask[]>([]);
-
-  useEffect(() => {
-    void listBroadcastTasks(200)
-      .then(setTasks)
-      .catch(() => undefined);
-  }, []);
-
-  useEffect(() => {
-    if (live) setTasks(live.tasks);
-  }, [live]);
-
-  const active = tasks.filter((task) => ["queued", "running"].includes(task.status)).length;
-  return <StatCard icon={<Send size={18} />} label="群发任务" value={String(active)} detail="排队或执行中" tone="violet" />;
-}
 
 /** Dashboard panel: recent broadcast tasks with a live progress bar. */
 export function BroadcastActivity() {
