@@ -81,25 +81,45 @@ docs/                  # 设计文档（从根目录迁入）
   - [x] db.py 新增 load_migration()，SCHEMA 常量删除；db.py 359 → 110 行
   - [x] 验证：legacy DB 升级（interval≥12→≥5 / 去 keyword_id / 加 sort_order）+ 幂等性 + 全新库 schema 全通过
 
-- [ ] Phase 6：前端 types + api 层
-  - [ ] types/keyword.ts broadcast.ts group.ts dashboard.ts napcat.ts auth.ts
-  - [ ] api/client.ts keywords.ts broadcast.ts napcat.ts auth.ts
+- [x] Phase 6：前端 types + api 层
+  - [x] types/api.ts（全部领域类型 + 状态文案映射；类型都很小，未再按域拆碎）
+  - [x] api/client.ts（apiJson / apiText / apiUpload）
+  - [x] api/auth|dashboard|groups|keywords|notifications|history|broadcast|napcat|settings|ops.ts
+  - [x] 页面不再散落魔法字符串路径，改为具名函数调用
 
-- [ ] Phase 7：前端 components 拆分
-  - [ ] StatCard / StatusDot / ServiceRow / GroupCard / GroupPicker / DestinationPicker / BroadcastActivity / Wizard
+- [x] Phase 7：前端 components 拆分
+  - [x] StatusDot / StatCard / ServiceRow / QuickAction / InfoRow / GroupCard / GroupPicker / DestinationPicker / EmptyState / BroadcastActivity(+BroadcastCountCard)
+  - [x] 新增 EmptyState：原先 5 处重复的 empty-state 结构收敛为一个组件
 
-- [ ] Phase 8：前端 pages 拆分
-  - [ ] DashboardPage / KeywordPage / BroadcastPage / HistoryPage / SettingsPage / LogsPage / LoginPage
+- [x] Phase 8：前端 pages 拆分
+  - [x] LoginPage / DashboardPage / KeywordPage / HistoryPage / NapCatPage / LogsPage / BroadcastPage / SystemSettingsPage / PlaceholderPage
+  - [x] 原先 4000+ 字符的单行 JSX 全部拆成可读多行；KeywordPage 抽出 KeywordRow、BroadcastPage 抽出 TaskActions
+  - [x] 删除从未被渲染的 NotificationsPage（死代码）
 
-- [ ] Phase 9：前端 CSS 分层
-  - [ ] styles/tokens.css base.css components/*.css pages/*.css
+- [x] Phase 9：前端 CSS 分层
+  - [x] styles/index.css + tokens / layout / dashboard / forms / napcat / responsive / theme / overlays / overlays-responsive
+  - [x] 按原文件「连续区间」切分，import 顺序即层叠顺序
+  - [x] 验证：拆分后重组内容与原文件逐字节一致；实际构建产物 CSS sha256 完全相同（FEBDC992…）
 
-- [ ] Phase 10：前端 hooks 抽离
-  - [ ] useApi / useBroadcastTasks / useBotStatus / useKeywords
+- [x] Phase 10：前端 hooks 抽离
+  - [x] hooks/usePoll.ts：收敛 5 处 useEffect+setInterval+cleanup 轮询样板
+  - [x] lib/parse.ts：收敛关键词/地址解析（原先内联两处）
 
-- [ ] Phase 11：文档迁移到 docs/
+- [x] Phase 11：文档迁移到 docs/
+  - [x] docs/REFACTOR_PROGRESS.md（本文件）
 
-- [ ] Phase 12：最终验证（build + health + 端到端 API）
+- [x] Phase 12：最终验证
+  - [x] 后端：路由集合 54==54；48 项行为断言；迁移升级/幂等验证
+  - [x] 前端：tsc -b（strict）+ vite build 通过；CSS 产物 sha256 与重构前一致
+  - [x] 本地 npm ci 后真实构建（Docker Desktop 未运行，未跑 compose build）
+
+## 成果概览（前端）
+
+| 项 | 重构前 | 重构后 |
+|---|---|---|
+| main.tsx | 555 行（全部页面/组件/类型/请求） | 11 行（仅挂载） |
+| style.css | 357 行单文件 | 9 个按层拆分的样式文件 |
+| 前端文件数 | 2 | 45 |
 
 ## 执行规则
 - 每个 phase 完成后 docker compose build + health check 必须通过
