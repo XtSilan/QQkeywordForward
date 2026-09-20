@@ -1,5 +1,5 @@
 import { RefreshCw } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { fetchLogs } from "../api/ops";
 import type { LogService } from "../types/api";
@@ -8,6 +8,7 @@ import { usePoll } from "../hooks/usePoll";
 export function LogsPage({ onError }: { onError: (message: string) => void }) {
   const [service, setService] = useState<LogService>("nonebot");
   const [logs, setLogs] = useState("正在加载日志...");
+  const preRef = useRef<HTMLPreElement>(null);
 
   const load = async () => {
     try {
@@ -18,6 +19,12 @@ export function LogsPage({ onError }: { onError: (message: string) => void }) {
   };
 
   usePoll(load, 5000, [service]);
+
+  // 日志更新后自动滚到底部
+  useEffect(() => {
+    const el = preRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [logs]);
 
   return (
     <section className="content">
@@ -47,7 +54,7 @@ export function LogsPage({ onError }: { onError: (message: string) => void }) {
             NapCat
           </button>
         </div>
-        <pre className="log-output">{logs}</pre>
+        <pre ref={preRef} className="log-output">{logs}</pre>
       </section>
     </section>
   );
