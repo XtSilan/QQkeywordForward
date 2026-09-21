@@ -23,6 +23,7 @@ class Settings(BaseSettings):
     driver: str = "~fastapi"
     onebot_access_token: str = ""
     onebot_ws_url: str = "ws://napcat:3001"
+    onebot_http_url: str = "http://napcat:3001"
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_username: str = ""

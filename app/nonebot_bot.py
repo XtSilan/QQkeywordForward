@@ -1,9 +1,16 @@
+import asyncio
 import json
 import re
 from datetime import datetime, timedelta, timezone
 
 import nonebot
-from nonebot.adapters.onebot.v11 import Adapter, Bot, GroupMessageEvent, Message
+from nonebot.adapters.onebot.v11 import (
+    Adapter,
+    Bot,
+    GroupDecreaseNoticeEvent,
+    GroupMessageEvent,
+    Message,
+)
 
 from app.db import connection, init_db
 from app.services import dispatch
@@ -51,6 +58,13 @@ def run() -> None:
     @driver.on_shutdown
     async def stop_scheduler() -> None:
         await dispatch.stop()
+
+    @driver.on_bot_connect
+    async def sync_groups_on_connect(bot: Bot) -> None:
+        # bot 连接（含换号重连）后立即拉一次群列表，不等 5 分钟周期；
+        # 稍等片刻让 NapCat 完成登录初始化，首次返回不全时下一轮周期会补齐。
+        await asyncio.sleep(5)
+        await dispatch.sync_groups(bot)
 
     matcher = nonebot.on_message(priority=10, block=False)
 
@@ -187,6 +201,22 @@ def run() -> None:
             event.group_id,
             event.user_id,
             event.message_id,
+        )
+
+    notice_matcher = nonebot.on_notice(priority=5, block=False)
+
+    @notice_matcher.handle()
+    async def handle_group_decrease(bot: Bot, event: GroupDecreaseNoticeEvent) -> None:
+        # 只有 bot 自己退群/被踢才禁用；群列表接口缺席不可信（见 dispatch.sync_groups）。
+        if event.user_id != event.self_id:
+            return
+        with connection() as conn:
+            conn.execute(
+                "UPDATE groups SET enabled=0 WHERE group_id=?",
+                (str(event.group_id),),
+            )
+        nonebot.logger.info(
+            "group_left group_id=%s sub_type=%s", event.group_id, event.sub_type
         )
 
     nonebot.run()

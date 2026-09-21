@@ -1,8 +1,8 @@
-import { RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
+import { LogOut, RefreshCw, RotateCcw, ShieldCheck } from "lucide-react";
 import QRCode from "qrcode";
 import { useEffect, useState } from "react";
 
-import { getNapCatStatus, refreshQrCode, requestQrCode, restartNapCat } from "../api/napcat";
+import { getNapCatStatus, logoutNapCat, refreshQrCode, requestQrCode, restartNapCat } from "../api/napcat";
 import { EmptyState } from "../components/EmptyState";
 import { InfoRow } from "../components/InfoRow";
 import { StatusDot } from "../components/StatusDot";
@@ -66,6 +66,22 @@ export function NapCatPage({ onError }: { onError: (message: string) => void }) 
       await load();
     } catch (reason) {
       onError(reason instanceof Error ? reason.message : "NapCat 重启失败");
+    } finally {
+      setBusy("");
+    }
+  };
+
+  const logout = async () => {
+    if (!window.confirm("确定退出当前 QQ 登录？退出后需要重新扫码或快速登录。")) {
+      return;
+    }
+    setBusy("logout");
+    try {
+      await logoutNapCat();
+      setQr("");
+      await load();
+    } catch (reason) {
+      onError(reason instanceof Error ? reason.message : "退出登录失败");
     } finally {
       setBusy("");
     }
@@ -139,8 +155,17 @@ export function NapCatPage({ onError }: { onError: (message: string) => void }) 
           </div>
           <div className="callout">
             <ShieldCheck size={17} />
-            <span>二维码过期时点击刷新。修改 NapCat 或 OneBot 配置后，再使用重启按钮应用。</span>
+            <span>二维码过期时点击刷新。退出登录后会回到扫码界面，重新登录后群列表会自动刷新。</span>
           </div>
+          <button
+            className="button ghost full-button"
+            onClick={() => void logout()}
+            disabled={busy !== "" || !online}
+            title={online ? "" : "当前未登录"}
+          >
+            <LogOut size={15} />
+            {busy === "logout" ? "退出中" : "退出登录"}
+          </button>
           <button className="button ghost full-button" onClick={() => void restart()} disabled={busy !== ""}>
             <RotateCcw size={15} />
             {busy === "restart" ? "重启中" : "重启 NapCat"}

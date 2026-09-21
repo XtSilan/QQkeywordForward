@@ -17,6 +17,10 @@ export function restartNapCat(): Promise<unknown> {
   return apiJson("/api/ops/napcat/restart", { method: "POST" });
 }
 
+export function logoutNapCat(): Promise<unknown> {
+  return apiJson("/api/ops/napcat/logout", { method: "POST" });
+}
+
 /** Whether the bot is currently logged in, for the broadcast warning banner. */
 export async function isBotOnline(): Promise<boolean> {
   const info = await apiJson<{ isLogin: boolean }>("/api/ops/napcat/login");

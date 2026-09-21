@@ -2,7 +2,7 @@ FROM node:22-alpine AS frontend
 
 WORKDIR /frontend
 COPY web/package.json web/package-lock.json ./
-RUN npm ci
+RUN npm ci --registry=https://registry.npmmirror.com
 COPY web ./
 RUN npm run build
 
@@ -12,7 +12,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir -i http://mirrors.tencentyun.com/pypi/simple/ --trusted-host mirrors.tencentyun.com -r requirements.txt
 
 COPY app ./app
 COPY --from=frontend /frontend/dist ./web/dist

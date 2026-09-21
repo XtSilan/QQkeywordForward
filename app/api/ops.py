@@ -64,6 +64,11 @@ async def napcat_restart(client: NapCatClient = Depends(napcat)) -> Any:
     return await client.restart()
 
 
+@router.post("/napcat/logout")
+async def napcat_logout(client: NapCatClient = Depends(napcat)) -> Any:
+    return await client.logout()
+
+
 @router.post("/napcat/process-restart")
 async def napcat_process_restart(client: NapCatClient = Depends(napcat)) -> Any:
     return await client.restart_process()

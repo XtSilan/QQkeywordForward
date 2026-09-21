@@ -109,6 +109,7 @@ def _bot() -> Bot | None:
 
 
 async def sync_groups(bot: Bot) -> None:
+    current_uin = str(bot.self_id)
     try:
         groups = await bot.call_api("get_group_list")
     except Exception as exc:
@@ -116,28 +117,35 @@ async def sync_groups(bot: Bot) -> None:
         return
     if not isinstance(groups, list):
         return
-    member_ids: set[str] = set()
     with connection() as conn:
+        last_uin = meta_repo.get(conn, "groups_uin")
+        if last_uin and last_uin != current_uin:
+            # 换号：NapCat 按 QQ 号存群列表，旧号的群对新号全部失效。
+            # 禁用旧群避免群发列表混入新号不在的群；新号的群在下面
+            # upsert 时恢复 enabled=1。
+            nonebot.logger.warning(
+                "bot account changed %s -> %s; disabling stale groups",
+                last_uin,
+                current_uin,
+            )
+            conn.execute("UPDATE groups SET enabled=0")
+        meta_repo.set(conn, "groups_uin", current_uin)
         for group in groups:
             group_id = str(group.get("group_id", "")).strip()
             if not group_id:
                 continue
-            member_ids.add(group_id)
             name = str(group.get("group_name", ""))
             avatar = f"https://p.qlogo.cn/gh/{group_id}/{group_id}/100/"
             conn.execute(
-                "INSERT INTO groups(group_id, name, avatar_url, last_synced_at) VALUES (?, ?, ?, CURRENT_TIMESTAMP) "
-                "ON CONFLICT(group_id) DO UPDATE SET name=excluded.name, avatar_url=excluded.avatar_url, last_synced_at=CURRENT_TIMESTAMP",
+                "INSERT INTO groups(group_id, name, avatar_url, last_synced_at, enabled) "
+                "VALUES (?, ?, ?, CURRENT_TIMESTAMP, 1) "
+                "ON CONFLICT(group_id) DO UPDATE SET name=excluded.name, "
+                "avatar_url=excluded.avatar_url, last_synced_at=CURRENT_TIMESTAMP, enabled=1",
                 (group_id, name, avatar),
             )
-        # Bot 已不在的群自动标记禁用，群发时不会选中。
-        # 重新入群后需在面板手动启用，避免误发。
-        if member_ids:
-            ph = ",".join("?" for _ in member_ids)
-            conn.execute(
-                f"UPDATE groups SET enabled=0 WHERE group_id NOT IN ({ph})",
-                tuple(member_ids),
-            )
+        # 注意：不能凭 get_group_list 的缺席来禁用群。NapCat 的群列表返回
+        # 不稳定（群多时常缺），缺席不代表退群，误禁会导致群发群数不对。
+        # 退群/被踢由 nonebot_bot 的 group_decrease 通知处理。
 
 
 # ---------------------------------------------------------------------------

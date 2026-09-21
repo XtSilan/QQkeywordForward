@@ -114,6 +114,24 @@ class NapCatClient:
     async def restart(self) -> Any:
         return await self.request("POST", "/api/QQLogin/RestartNapCat")
 
+    async def logout(self) -> Any:
+        """Log the current QQ account out via NapCat's OneBot HTTP API.
+
+        NapCat has no WebUI logout endpoint; ``/bot_exit`` is the supported
+        action and returns the container to the QR-code login screen.
+        """
+        headers: dict[str, str] = {}
+        if self.settings.onebot_access_token:
+            headers["Authorization"] = f"Bearer {self.settings.onebot_access_token}"
+        url = self.settings.onebot_http_url.rstrip("/") + "/bot_exit"
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(url, json={}, headers=headers)
+        response.raise_for_status()
+        payload = response.json()
+        if isinstance(payload, dict) and payload.get("status") not in (None, "ok"):
+            raise RuntimeError(payload.get("wording") or payload.get("message") or "退出登录失败")
+        return payload
+
     async def restart_process(self) -> Any:
         return await self.request("POST", "/api/Process/Restart")
 
