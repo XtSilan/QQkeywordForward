@@ -12,13 +12,14 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 
 from app.api.deps import admin_guard
 from app.db import bump_config_revision, connection
 from app.repositories import meta_repo
 from app.schemas.settings import (
     AlertDedupSettingsPayload,
+    AutoLoginSettingsPayload,
     SmtpSettingsPayload,
 )
 from app.services import orders as order_dedup
@@ -61,6 +62,26 @@ def put_order_dedup_settings(payload: AlertDedupSettingsPayload) -> dict[str, An
             "alert_ad_keywords": ad_keywords,
         })
     return {"saved": True, **payload.model_dump(), "revision": bump_config_revision()}
+
+
+@router.get("/auto-login")
+def get_auto_login_settings(settings: Settings = Depends(get_settings)) -> dict[str, Any]:
+    with connection() as conn:
+        configured = meta_repo.get(conn, "auto_login_uin")
+    return {
+        # DB override wins; the env var is the bootstrap fallback.
+        "uin": (configured if configured is not None else settings.quick_login_uin).strip(),
+    }
+
+
+@router.put("/auto-login")
+def put_auto_login_settings(payload: AutoLoginSettingsPayload) -> dict[str, Any]:
+    uin = payload.uin.strip()
+    if uin and not uin.isdigit():
+        raise HTTPException(status_code=400, detail="QQ 号只能是数字")
+    with connection() as conn:
+        meta_repo.set(conn, "auto_login_uin", uin)
+    return {"saved": True, "uin": uin, "revision": bump_config_revision()}
 
 
 @router.get("/smtp")

@@ -22,3 +22,9 @@ class AlertDedupSettingsPayload(BaseModel):
     new_phone_repush: bool = True
     ad_filter_enabled: bool = True
     ad_keywords: str = Field(default="", max_length=500)
+
+
+class AutoLoginSettingsPayload(BaseModel):
+    """QQ account the offline auto-recovery may quick-login back into."""
+
+    uin: str = Field(default="", max_length=20)

@@ -142,6 +142,9 @@ export type OrderDedupSettings = {
   ad_keywords: string;
 };
 
+/** Auto-recovery target account; empty disables automatic quick-login. */
+export type AutoLoginSettings = { uin: string };
+
 /** Human-readable labels for broadcast task statuses. */
 export const BROADCAST_STATUS_LABEL: Record<string, string> = {
   draft: "草稿",

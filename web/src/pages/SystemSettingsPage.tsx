@@ -2,12 +2,14 @@ import { ShieldCheck } from "lucide-react";
 import { useEffect, useState } from "react";
 
 import {
+  getAutoLoginSettings,
   getOrderDedupSettings,
   getSmtpSettings,
+  saveAutoLoginSettings,
   saveOrderDedupSettings,
   saveSmtpSettings,
 } from "../api/settings";
-import type { OrderDedupSettings, SmtpSettings } from "../types/api";
+import type { AutoLoginSettings, OrderDedupSettings, SmtpSettings } from "../types/api";
 
 const DEFAULT_SMTP: SmtpSettings = {
   host: "",
@@ -30,16 +32,20 @@ const DEFAULT_DEDUP: OrderDedupSettings = {
   ad_keywords: "招工,日结,时薪,暑假工",
 };
 
+const DEFAULT_AUTO_LOGIN: AutoLoginSettings = { uin: "" };
+
 export function SystemSettingsPage({ onError }: { onError: (message: string) => void }) {
   const [smtp, setSmtp] = useState<SmtpSettings>(DEFAULT_SMTP);
   const [dedup, setDedup] = useState<OrderDedupSettings>(DEFAULT_DEDUP);
+  const [autoLogin, setAutoLogin] = useState<AutoLoginSettings>(DEFAULT_AUTO_LOGIN);
 
   useEffect(() => {
-    void Promise.all([getSmtpSettings(), getOrderDedupSettings()])
-      .then(([s, d]) => {
+    void Promise.all([getSmtpSettings(), getOrderDedupSettings(), getAutoLoginSettings()])
+      .then(([s, d, a]) => {
         // Responses omit secrets; the spread keeps whatever the user typed so far.
         setSmtp((value) => ({ ...value, ...s }));
         setDedup((value) => ({ ...value, ...d }));
+        setAutoLogin((value) => ({ ...value, ...a }));
       })
       .catch((reason) => onError(reason instanceof Error ? reason.message : "设置读取失败"));
   }, []);
@@ -149,6 +155,40 @@ export function SystemSettingsPage({ onError }: { onError: (message: string) => 
             </span>
           </div>
           <button className="button primary">保存去重设置</button>
+        </form>
+      </section>
+
+      <section className="panel form-panel settings-card">
+        <div className="panel-heading">
+          <div>
+            <div className="panel-kicker">AUTO LOGIN</div>
+            <h3>掉线自动恢复</h3>
+          </div>
+          <span className="muted">掉线后每 10 分钟自动尝试</span>
+        </div>
+        <form
+          className="settings-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void saveAutoLoginSettings(autoLogin).catch((reason) =>
+              onError(reason instanceof Error ? reason.message : "保存失败"),
+            );
+          }}
+        >
+          <label className="field">
+            <span>自动登录的 QQ 号</span>
+            <input
+              value={autoLogin.uin}
+              onChange={(event) =>
+                setAutoLogin({ ...autoLogin, uin: event.target.value.replace(/\D/g, "") })
+              }
+              placeholder="例如 3975673120"
+            />
+            <small>
+              掉线后系统只对这个 QQ 号尝试快速登录恢复（无需扫码，登录态有效时自动回线）。留空表示不自动恢复。需要重新扫码的失效会话无法自动恢复。
+            </small>
+          </label>
+          <button className="button primary">保存自动登录设置</button>
         </form>
       </section>
 

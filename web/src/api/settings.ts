@@ -1,4 +1,5 @@
 import type {
+  AutoLoginSettings,
   OrderDedupSettings,
   SmtpSettings,
   SmtpSettingsResponse,
@@ -11,6 +12,17 @@ export function getSmtpSettings(): Promise<SmtpSettingsResponse> {
 
 export function saveSmtpSettings(value: SmtpSettings): Promise<unknown> {
   return apiJson("/api/settings/smtp", { method: "PUT", body: JSON.stringify(value) });
+}
+
+export function getAutoLoginSettings(): Promise<AutoLoginSettings> {
+  return apiJson<AutoLoginSettings>("/api/settings/auto-login");
+}
+
+export function saveAutoLoginSettings(value: AutoLoginSettings): Promise<unknown> {
+  return apiJson("/api/settings/auto-login", {
+    method: "PUT",
+    body: JSON.stringify(value),
+  });
 }
 
 export function getOrderDedupSettings(): Promise<OrderDedupSettings> {
