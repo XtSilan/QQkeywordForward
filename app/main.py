@@ -24,6 +24,7 @@ from app.api import (
     keywords,
     notifications,
     ops,
+    releases,
     settings as settings_routes,
     uploads,
 )
@@ -85,6 +86,7 @@ for router in (
     uploads.router,
     audit.router,
     ops.router,
+    releases.router,
 ):
     app.include_router(router)
 
