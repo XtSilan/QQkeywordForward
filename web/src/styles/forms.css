@@ -53,8 +53,6 @@
 .pager .button:disabled { cursor: not-allowed; }
 .pager-jump { display: inline-flex; align-items: center; gap: 4px; color: #6b7280; font-size: 11px; }
 .pager-jump input { width: 56px; min-height: 26px; padding: 0 6px; border: 1px solid #dce3eb; border-radius: 5px; font-size: 11px; }
-.history-date { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; margin-top: 12px; }
-.history-date .field { max-width: 190px; }
 .progress-cell { min-width: 132px; }
 .progress-cell > span { display: block; margin-bottom: 6px; color: #59697d; font-size: 11px; }
 table { width: 100%; border-collapse: collapse; color: #3b4a5f; font-size: 12px; }

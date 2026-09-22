@@ -19,6 +19,7 @@ import { BrowserRouter, NavLink, Route, Routes, useLocation } from "react-router
 import { fetchAuthMe } from "./api/auth";
 import { getDashboard } from "./api/dashboard";
 import { restartService } from "./api/ops";
+import { NotificationBell } from "./components/NotificationBell";
 import { StatusDot } from "./components/StatusDot";
 import { BroadcastPage } from "./pages/BroadcastPage";
 import { DashboardPage } from "./pages/DashboardPage";
@@ -172,6 +173,7 @@ function AppShell() {
               <RefreshCw size={15} />
               刷新
             </button>
+            <NotificationBell />
           </div>
         </header>
 

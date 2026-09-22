@@ -16,31 +16,9 @@ function readPage(raw: string | null): number {
   return Number.isInteger(parsed) && parsed > 1 ? parsed : 1;
 }
 
-/** The `YYYY-MM-DD` shape produced by `<input type="date">`. */
-const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
-
-/** Read `?date=`; anything unusable means "the whole history". */
-function readDate(raw: string | null): string {
-  return raw && DATE_PATTERN.test(raw) ? raw : "";
-}
-
-/**
- * UTC bounds covering the picked *local* calendar day. The API filters on UTC
- * instants, so the browser's timezone is what decides where a day begins.
- */
-function dayBounds(date: string): { since?: string; until?: string } {
-  if (!DATE_PATTERN.test(date)) return {};
-  const [year, month, day] = date.split("-").map(Number);
-  return {
-    since: new Date(year, month - 1, day).toISOString(),
-    until: new Date(year, month - 1, day + 1).toISOString(),
-  };
-}
-
 export function HistoryPage({ onError }: { onError: (message: string) => void }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const page = readPage(searchParams.get("page"));
-  const date = readDate(searchParams.get("date"));
   const live = useLiveSnapshot();
 
   const [items, setItems] = useState<HistoryItem[]>([]);
@@ -60,7 +38,6 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
   const load = async () => {
     try {
       const data = await listHistory({
-        ...dayBounds(date),
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       });
@@ -73,7 +50,7 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
 
   useEffect(() => {
     void load();
-  }, [page, date]);
+  }, [page]);
 
   // The jump box mirrors the page that is actually loaded.
   useEffect(() => setPageDraft(String(page)), [page]);
@@ -90,22 +67,6 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
   useEffect(() => {
     if (total > 0 && page > pageCount) goToPage(pageCount, true);
   }, [total, page, pageCount]);
-
-  /** Picking a day drops back to page 1; clearing it restores the full list. */
-  const selectDate = (next: string) => {
-    const params = new URLSearchParams(searchParams);
-    if (next && DATE_PATTERN.test(next)) params.set("date", next);
-    else params.delete("date");
-    params.delete("page");
-    setSearchParams(params, { replace: true });
-  };
-
-  const clearFilters = () => {
-    const params = new URLSearchParams(searchParams);
-    params.delete("date");
-    params.delete("page");
-    setSearchParams(params, { replace: true });
-  };
 
   const jumpToPage = () => {
     const wanted = Number(pageDraft);
@@ -128,31 +89,6 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
           刷新
         </button>
       </div>
-
-      <section className="panel form-panel history-filter">
-        <div className="panel-heading">
-          <div>
-            <div className="panel-kicker">FILTER</div>
-            <h3>筛选历史</h3>
-          </div>
-          <button className="button ghost" onClick={clearFilters}>
-            全部历史
-          </button>
-        </div>
-        <div className="history-date">
-          <label className="field">
-            <span>按日期筛选</span>
-            <input
-              type="date"
-              value={date}
-              onChange={(event) => selectDate(event.target.value)}
-            />
-          </label>
-          <span className="muted">
-            {date ? `只显示 ${date} 当天的命中（按本机时区）` : "未选日期时显示全部历史"}
-          </span>
-        </div>
-      </section>
 
       <section className="panel table-panel">
         <div className="panel-heading">
