@@ -1,5 +1,12 @@
 /* Narrow-viewport adjustments for the modal and list layouts. */
 
+@media (max-width: 860px) {
+  /* The secondary settings nav moves above the section instead of beside it. */
+  .settings-layout { grid-template-columns: 1fr; }
+  .settings-nav { grid-auto-flow: column; grid-auto-columns: 1fr; }
+  .settings-nav-caption { display: none; }
+}
+
 @media (max-width: 640px) {
   .wizard-card { padding: 20px; border-radius: 14px; }
   .wizard-actions { bottom: -20px; margin: 20px -20px -20px; padding: 13px 20px 17px; }
@@ -7,6 +14,8 @@
   .inline-destination-form { grid-template-columns: 1fr; }
   .inline-destination-form .destination-note { grid-column: auto; }
   .settings-form .field-wide { grid-column: auto; }
+  .settings-nav { grid-auto-flow: row; grid-auto-columns: auto; }
+  .settings-nav-item { justify-content: center; }
   .keyword-row, .reminder-row { align-items: flex-start; flex-wrap: wrap; }
   .keyword-row .switch, .reminder-row .switch { margin-left: auto; }
 }

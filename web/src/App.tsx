@@ -14,7 +14,7 @@ import {
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useEffect, useState } from "react";
-import { BrowserRouter, NavLink, Route, Routes, useLocation } from "react-router-dom";
+import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from "react-router-dom";
 
 import { fetchAuthMe } from "./api/auth";
 import { getDashboard } from "./api/dashboard";
@@ -29,7 +29,12 @@ import { LoginPage } from "./pages/LoginPage";
 import { LogsPage } from "./pages/LogsPage";
 import { NapCatPage } from "./pages/NapCatPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
-import { SystemSettingsPage } from "./pages/SystemSettingsPage";
+import {
+  AutoLoginSection,
+  OrderDedupSection,
+  SmtpSection,
+  SystemSettingsPage,
+} from "./pages/SystemSettingsPage";
 import type { Dashboard, ServiceName } from "./types/api";
 import { usePoll } from "./hooks/usePoll";
 
@@ -197,7 +202,12 @@ function AppShell() {
           <Route path="/broadcast" element={<BroadcastPage onError={setError} />} />
           <Route path="/napcat" element={<NapCatPage onError={setError} />} />
           <Route path="/logs" element={<LogsPage onError={setError} />} />
-          <Route path="/settings" element={<SystemSettingsPage onError={setError} />} />
+          <Route path="/settings" element={<SystemSettingsPage />}>
+            <Route index element={<Navigate to="dedup" replace />} />
+            <Route path="dedup" element={<OrderDedupSection onError={setError} />} />
+            <Route path="auto-login" element={<AutoLoginSection onError={setError} />} />
+            <Route path="smtp" element={<SmtpSection onError={setError} />} />
+          </Route>
           <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </main>

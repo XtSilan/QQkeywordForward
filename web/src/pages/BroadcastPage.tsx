@@ -324,7 +324,7 @@ export function BroadcastPage({ onError }: { onError: (message: string) => void 
           <EmptyState icon={<Send size={22} />} title="暂无群发任务" hint="创建任务后，进度会显示在这里。" />
         ) : (
           <div className="table-wrap">
-            <table>
+            <table className="task-table">
               <thead>
                 <tr>
                   <th>任务</th>

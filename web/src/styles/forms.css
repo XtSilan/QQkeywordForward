@@ -43,7 +43,14 @@
 .status-badge.status-completed { background: #f1f5f9; color: #475569; }
 .status-badge.status-completed_with_errors { background: #fee2e2; color: #b91c1c; }
 .status-badge.status-cancelled { background: #f3f4f6; color: #6b7280; }
-.task-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.task-actions { display: flex; flex-wrap: nowrap; gap: 6px; align-items: center; }
+/* Task rows stay one horizontal strip; a narrow viewport scrolls right (see .table-wrap)
+   instead of letting the action buttons wrap and stretch the row. */
+.task-table { white-space: nowrap; }
+.task-table td strong, .task-table td small { display: inline; }
+.task-table td small { margin-top: 0; margin-left: 8px; }
+.task-table .progress-cell > span { display: inline-block; margin: 0 8px 0 0; }
+.task-table .progress-bar { display: inline-block; width: 96px; vertical-align: middle; }
 .inline-input { display: inline-flex; align-items: center; gap: 4px; font-size: 11px; color: #6b7280; }
 .inline-input input { width: 56px; min-height: 26px; padding: 0 6px; border: 1px solid #dce3eb; border-radius: 5px; font-size: 11px; }
 .table-panel { min-height: 190px; }
