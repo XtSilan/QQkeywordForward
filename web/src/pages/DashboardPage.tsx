@@ -1,5 +1,6 @@
 import { Activity, Bell, KeyRound, MessageSquareText, Send, ShieldCheck, Users } from "lucide-react";
 
+import { AnnouncementModal } from "../components/AnnouncementModal";
 import { BroadcastActivity } from "../components/BroadcastActivity";
 import { QuickAction } from "../components/QuickAction";
 import { ServiceRow } from "../components/ServiceRow";
@@ -19,6 +20,8 @@ export function DashboardPage({
   const online = Boolean(dashboard?.napcat?.coreReady || dashboard?.napcat?.isLogin);
   return (
     <section className="content">
+      <AnnouncementModal />
+
       <div className="welcome-row">
         <div>
           <h2>运行概览</h2>

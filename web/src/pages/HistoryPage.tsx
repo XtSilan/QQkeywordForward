@@ -2,11 +2,9 @@ import { ChevronLeft, ChevronRight, FileText, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { listGroups } from "../api/groups";
 import { listHistory } from "../api/history";
 import { EmptyState } from "../components/EmptyState";
-import { GroupPicker } from "../components/GroupPicker";
-import { NOTIFY_STATUS_LABEL, type Group, type HistoryItem } from "../types/api";
+import { NOTIFY_STATUS_LABEL, type HistoryItem } from "../types/api";
 import { useLiveSnapshot } from "../lib/live";
 
 /** Rows per request; pagination is done server-side via limit/offset. */
@@ -47,8 +45,6 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
 
   const [items, setItems] = useState<HistoryItem[]>([]);
   const [total, setTotal] = useState(0);
-  const [groups, setGroups] = useState<Group[]>([]);
-  const [selectedGroup, setSelectedGroup] = useState<string[]>([]);
   const [pageDraft, setPageDraft] = useState(String(page));
 
   const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
@@ -64,7 +60,6 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
   const load = async () => {
     try {
       const data = await listHistory({
-        groupId: selectedGroup[0],
         ...dayBounds(date),
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
@@ -77,14 +72,8 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
   };
 
   useEffect(() => {
-    void listGroups()
-      .then(setGroups)
-      .catch((reason) => onError(reason instanceof Error ? reason.message : "群聊加载失败"));
-  }, []);
-
-  useEffect(() => {
     void load();
-  }, [selectedGroup, page, date]);
+  }, [page, date]);
 
   // The jump box mirrors the page that is actually loaded.
   useEffect(() => setPageDraft(String(page)), [page]);
@@ -102,11 +91,6 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
     if (total > 0 && page > pageCount) goToPage(pageCount, true);
   }, [total, page, pageCount]);
 
-  const selectGroup = (next: string[]) => {
-    setSelectedGroup(next);
-    goToPage(1, true);
-  };
-
   /** Picking a day drops back to page 1; clearing it restores the full list. */
   const selectDate = (next: string) => {
     const params = new URLSearchParams(searchParams);
@@ -117,7 +101,6 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
   };
 
   const clearFilters = () => {
-    setSelectedGroup([]);
     const params = new URLSearchParams(searchParams);
     params.delete("date");
     params.delete("page");
@@ -156,7 +139,6 @@ export function HistoryPage({ onError }: { onError: (message: string) => void })
             全部历史
           </button>
         </div>
-        <GroupPicker groups={groups} selected={selectedGroup} onChange={selectGroup} single />
         <div className="history-date">
           <label className="field">
             <span>按日期筛选</span>

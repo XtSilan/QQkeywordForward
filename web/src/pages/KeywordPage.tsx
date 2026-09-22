@@ -163,7 +163,9 @@ export function KeywordPage({ onError }: { onError: (message: string) => void })
     }
   };
 
-  const visibleGroups = groups.filter((group) =>
+  // 只让当前登录账号的群进入选择器；groups 本身保留全量，给 KeywordRow 解析群名用。
+  const groupOptions = groups.filter((group) => group.enabled);
+  const visibleGroups = groupOptions.filter((group) =>
     `${group.name} ${group.group_id}`.toLowerCase().includes(groupSearch.toLowerCase()),
   );
   const filteredKeywords = keywords.filter((keyword) =>
