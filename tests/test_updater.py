@@ -251,6 +251,79 @@ def test_ensure_env_link_keeps_user_file_and_fixes_broken_symlink():
     assert os.readlink(project2 / ".env") == ".env.prod"
 
 
+def test_failure_backoff_ignores_future_finished_epoch():
+    """Clock skew must not lock auto-poll out forever.
+
+    ``age = now - finished`` goes negative when the recorded epoch is slightly
+    ahead of the local clock; the old ``age < BACKOFF`` check then stayed true
+    permanently and poll_once never ran again.
+    """
+    import asyncio
+    import time
+
+    from updater import config, service
+    from updater.state import state
+
+    previous = state.get("last_run")
+    started = []
+    original = service.check_and_maybe_start
+
+    async def fake_check(trigger: str, force: bool, dry_run: bool):
+        started.append(trigger)
+        return {"ok": True}
+
+    service.check_and_maybe_start = fake_check  # type: ignore[assignment]
+    state["last_run"] = {
+        "ok": False,
+        "exit_code": 2,
+        # ~1 hour in the future: age is largely negative
+        "finished_epoch": time.time() + 3600,
+    }
+    try:
+        assert config.ENABLED and config.AUTO_UPDATE
+        asyncio.get_event_loop_policy()
+        asyncio.run(service.poll_once())
+    finally:
+        service.check_and_maybe_start = original  # type: ignore[assignment]
+        if previous is None:
+            state.pop("last_run", None)
+        else:
+            state["last_run"] = previous
+    assert started == ["poll"], "future finished_epoch must not block poll"
+
+
+def test_failure_backoff_still_holds_for_recent_failure():
+    import asyncio
+    import time
+
+    from updater import service
+    from updater.state import state
+
+    previous = state.get("last_run")
+    started = []
+    original = service.check_and_maybe_start
+
+    async def fake_check(trigger: str, force: bool, dry_run: bool):
+        started.append(trigger)
+        return {"ok": True}
+
+    service.check_and_maybe_start = fake_check  # type: ignore[assignment]
+    state["last_run"] = {
+        "ok": False,
+        "exit_code": 2,
+        "finished_epoch": time.time() - 10,  # just failed: still in backoff
+    }
+    try:
+        asyncio.run(service.poll_once())
+    finally:
+        service.check_and_maybe_start = original  # type: ignore[assignment]
+        if previous is None:
+            state.pop("last_run", None)
+        else:
+            state["last_run"] = previous
+    assert started == [], "recent failure must still back off"
+
+
 def main() -> int:
     tests = [
         (name, fn)

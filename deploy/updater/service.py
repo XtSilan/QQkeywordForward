@@ -36,11 +36,16 @@ async def start_helper(trigger: str, force: bool = False, dry_run: bool = False)
             sha_before = await git.local_sha()
         except Exception:  # noqa: BLE001 - a broken checkout still deserves an attempt
             pass
+        # Bind the checkout at the *same* path as on the host. Inside the helper
+        # `docker compose up` resolves relative volumes (./:/project) against the
+        # helper's filesystem and ships that absolute path to the daemon — if we
+        # remapped to /project, the host would later mount the wrong directory
+        # and the updater would lose the git checkout.
         body = {
             "Image": config.HELPER_IMAGE,
             "Cmd": ["python", "-u", "/app/update_run.py"],
             "Env": [
-                f"PROJECT_DIR={config.PROJECT_DIR}",
+                f"PROJECT_DIR={host_path}",
                 f"UPDATER_BRANCH={config.BRANCH}",
                 f"UPDATER_TRIGGER={trigger}",
                 f"UPDATER_FORCE={'1' if force else '0'}",
@@ -50,7 +55,7 @@ async def start_helper(trigger: str, force: bool = False, dry_run: bool = False)
             "Labels": {"qq.bot.updater.role": "update-run"},
             "HostConfig": {
                 "Binds": [
-                    f"{host_path}:{config.PROJECT_DIR}",
+                    f"{host_path}:{host_path}",
                     f"{config.DOCKER_SOCKET}:{config.DOCKER_SOCKET}",
                 ],
             },
@@ -156,7 +161,10 @@ async def poll_once() -> None:
     last = state.get("last_run") or {}
     if last and not last.get("ok"):
         finished = float(last.get("finished_epoch") or 0)
-        if finished and time.time() - finished < config.FAILURE_BACKOFF:
+        # Clock skew can put finished_epoch slightly in the future; a negative
+        # age must not satisfy `age < BACKOFF` forever or auto-poll never runs.
+        age = time.time() - finished
+        if finished and 0 <= age < config.FAILURE_BACKOFF:
             return
     # Shared decision path: behind origin, or running an older build than HEAD.
     await check_and_maybe_start("poll", force=False, dry_run=False)
