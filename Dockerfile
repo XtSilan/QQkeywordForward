@@ -8,6 +8,13 @@ RUN npm run build
 
 FROM python:3.12-slim
 
+# Build metadata: compose passes APP_VERSION (git short SHA, kept up to date by
+# the updater helper in .env.prod) so /api/health and the WebUI sidebar can show
+# which build is actually running.
+ARG APP_VERSION=dev
+ARG APP_BUILD_TIME=
+ENV APP_VERSION=${APP_VERSION} APP_BUILD_TIME=${APP_BUILD_TIME}
+
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 

@@ -1,0 +1,5 @@
+# Build contexts for the updater image live in this directory only; the repo
+# root's .dockerignore does not apply here.
+.git
+__pycache__
+*.py[cod]

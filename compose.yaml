@@ -48,8 +48,10 @@ services:
     volumes:
       - ./data/napcat:/app/napcat/config
     ports:
-      - "6099:6099"
-      - "3001:3001"
+      # 宿主机端口在 .env.prod 里改（*_HOST_PORT），容器内端口固定不动，
+      # 服务间互访（NAPCAT_WEBUI_URL / ONEBOT_WS_URL 等）不受影响。
+      - "${NAPCAT_WEBUI_HOST_PORT:-6099}:6099"
+      - "${NAPCAT_ONEBOT_HOST_PORT:-3001}:3001"
     depends_on:
       napcat-init:
         condition: service_completed_successfully
@@ -57,7 +59,11 @@ services:
       - botnet
 
   nonebot:
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: "${APP_VERSION:-dev}"
+        APP_BUILD_TIME: "${APP_BUILD_TIME:-}"
     container_name: qq-bot-nonebot
     restart: unless-stopped
     command: python -m app.nonebot_bot
@@ -72,7 +78,7 @@ services:
       - ./data/logs/nonebot:/app/data/logs/nonebot
       - ./.env.prod:/app/.env.prod:ro
     ports:
-      - "8081:8081"
+      - "${NONEBOT_HOST_PORT:-8081}:8081"
     depends_on:
       napcat:
         condition: service_started
@@ -80,7 +86,11 @@ services:
       - botnet
 
   webui:
-    build: .
+    build:
+      context: .
+      args:
+        APP_VERSION: "${APP_VERSION:-dev}"
+        APP_BUILD_TIME: "${APP_BUILD_TIME:-}"
     container_name: qq-bot-webui
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8080
@@ -97,7 +107,7 @@ services:
       # Enable only when CONTROL_ENABLED=true.
       - /var/run/docker.sock:/var/run/docker.sock
     ports:
-      - "18080:8080"
+      - "${WEBUI_HOST_PORT:-18080}:8080"
     depends_on:
       napcat:
         condition: service_started
@@ -106,6 +116,34 @@ services:
     networks:
       - botnet
 
+  # CI/CD updater: receives the deploy webhook from GitHub Actions (and polls
+  # origin as a fallback), then spawns a throwaway `qq-bot-updater-run`
+  # container that does git pull + docker compose build && up -d. Mounting the
+  # checkout + docker.sock here is what lets it drive the rebuild; running the
+  # rebuild in a sibling container is what lets it be recreated safely.
+  updater:
+    build:
+      context: ./deploy
+    image: qq-bot-updater:local
+    container_name: qq-bot-updater
+    restart: unless-stopped
+    env_file:
+      - ./.env.prod
+    environment:
+      PROJECT_DIR: /project
+      UPDATER_HELPER_IMAGE: qq-bot-updater:local
+    volumes:
+      - ./:/project
+      - /var/run/docker.sock:/var/run/docker.sock
+    ports:
+      # Webhook target for GitHub Actions; protect with UPDATER_WEBHOOK_SECRET
+      # and firewall the port if the host has a public address. Changing the
+      # host port also requires updating the DEPLOY_WEBHOOK_URL repo secret.
+      - "${UPDATER_HOST_PORT:-18081}:18081"
+    networks:
+      - botnet
+
 networks:
   botnet:
     driver: bridge
+

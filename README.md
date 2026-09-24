@@ -69,14 +69,29 @@ SMTP_STARTTLS=true
 SMTP_SSL=false
 SMTP_TIMEOUT=15
 
-# 必须是 NapCat 容器能够访问到的地址
-PUBLIC_BASE_URL=http://你的服务器IP:8080
+# 必须是 NapCat 容器能够访问到的地址（端口跟 WEBUI_HOST_PORT 走）
+PUBLIC_BASE_URL=http://你的服务器IP:18080
 MAX_UPLOAD_SIZE_MB=10
+
+# --- 宿主机端口映射（compose 插值，改这里避开本地端口冲突） ---
+# 只改宿主机侧，容器内端口固定，服务间互访不受影响。
+# 这两个文件被 Git 忽略，改端口不会和自动更新的 git pull 冲突。
+WEBUI_HOST_PORT=18080         # WebUI 控制台
+NONEBOT_HOST_PORT=8081        # NoneBot OneBot V11 反向 WS 入口
+NAPCAT_WEBUI_HOST_PORT=6099   # NapCat WebUI（二维码登录页）
+NAPCAT_ONEBOT_HOST_PORT=3001  # NapCat OneBot 网络端口
+UPDATER_HOST_PORT=18081       # CI/CD webhook（改后同步更新 GitHub Secret）
 ```
 
 ```bash
 chmod 600 .env.prod
+# compose 从 .env 读端口插值；.env 只需是指向 .env.prod 的软链（已被 Git 忽略，
+# 自动更新的 helper 也会在缺失时自动补建）
+ln -s .env.prod .env
 ```
+
+> [!NOTE]
+> **改端口**：只改 `.env.prod` 里的 `*_HOST_PORT`，然后 `docker compose up -d` 生效。不要直接改 `compose.yaml`——它是被 git 跟踪的文件，本地改动会在自动更新时被 updater 的「工作区有本地改动」保护拒绝拉取。改了 `WEBUI_HOST_PORT` 记得同步改 `PUBLIC_BASE_URL`；改了 `UPDATER_HOST_PORT` 记得更新 GitHub Secret `DEPLOY_WEBHOOK_URL`。容器内部端口（8080/8081/6099/3001）不建议动，服务间互访（`NAPCAT_WEBUI_URL`、`ONEBOT_WS_URL`）按这些端口寻址。
 
 > [!WARNING]
 > `.env.prod`、NapCat token、QQ 密码、SMTP 密码与 `data/` 都不要提交到版本库。正式使用前请至少替换 `ADMIN_TOKEN`、`AUTH_SESSION_SECRET` 和 NapCat token。
@@ -88,18 +103,25 @@ chmod 600 .env.prod
 
 ```bash
 docker compose config
-docker compose up -d --build
+./scripts/up.sh        # = docker compose up -d --build，有图形环境时自动打开 WebUI
 docker compose ps
 ```
 
-控制台地址：<http://localhost:8080>
+控制台地址：<http://localhost:18080>（端口以 `.env.prod` 的 `WEBUI_HOST_PORT` 为准）
 
-| 服务 | 宿主机端口 | 用途 |
+`./scripts/up.sh` 会等 WebUI 健康就绪后再打开浏览器；仅当**交互式终端**且存在
+`DISPLAY`/`WAYLAND_DISPLAY`（本地桌面或 SSH -X）且装有 `xdg-open` 时才真正打开。
+无 TTY（cron/systemd/管道）、`CI` 环境、SSH/无头服务器一律只打印地址不弹窗。
+不需要自动打开时加 `--no-open`。CI/CD 的自动更新 helper 不走这个脚本，
+始终只执行 `docker compose build && up -d`。
+
+| 服务 | 默认宿主机端口 | 用途 |
 | --- | ---: | --- |
-| WebUI | 8080 | 管理控制台 |
-| NoneBot | 8081 | OneBot V11 反向连接入口 |
-| NapCat | 6099 | NapCat WebUI |
-| NapCat | 3001 | OneBot 网络端口 |
+| WebUI | 18080 | 管理控制台（`WEBUI_HOST_PORT`） |
+| NoneBot | 8081 | OneBot V11 反向连接入口（`NONEBOT_HOST_PORT`） |
+| NapCat | 6099 | NapCat WebUI（`NAPCAT_WEBUI_HOST_PORT`） |
+| NapCat | 3001 | OneBot 网络端口（`NAPCAT_ONEBOT_HOST_PORT`） |
+| Updater | 18081 | CI/CD 更新触发 webhook 与状态查询（`UPDATER_HOST_PORT`） |
 
 查看日志：
 
@@ -107,6 +129,7 @@ docker compose ps
 docker compose logs -f --tail=200 webui
 docker compose logs -f --tail=200 nonebot
 docker compose logs -f --tail=200 napcat
+docker compose logs -f --tail=200 updater
 ```
 
 ## 首次配置
@@ -167,7 +190,7 @@ Authorization: Bearer <ADMIN_TOKEN>
 
 ```bash
 curl -H "Authorization: Bearer $ADMIN_TOKEN" \
-  http://localhost:8080/api/audit-logs
+  http://localhost:18080/api/audit-logs
 ```
 
 审计不会保存 token、NapCat credential、SMTP 密码或消息正文。
@@ -180,6 +203,7 @@ curl -H "Authorization: Bearer $ADMIN_TOKEN" \
 data/napcat/       NapCat 配置、登录态和设备信息
 data/nonebot/      SQLite、上传图片和 NoneBot 数据
 data/logs/nonebot/ NoneBot 日志
+data/updater/      上次自动更新的结果与日志尾部
 .env.prod          密钥和运行配置
 ```
 
@@ -197,7 +221,7 @@ docker compose up -d --build --force-recreate
 ```bash
 docker compose stop
 tar --xattrs --acls -czf qq-bot-backup-$(date +%F).tar.gz \
-  compose.yaml Dockerfile requirements.txt .env.prod app web data
+  compose.yaml Dockerfile requirements.txt deploy .env.prod app web data
 docker compose start
 ```
 
@@ -210,7 +234,107 @@ docker compose up -d --build
 
 NapCat 登录态恢复后仍可能因设备验证或风控要求重新登录。
 
+## 自动更新与 CI/CD
+
+推送 GitHub **不会**直接改动服务器：更新由触发器发起，整条链路全部跑在容器里。
+
+```text
+git push master
+   -> GitHub Actions：pytest + WebUI build（.github/workflows/ci.yml）
+   -> 测试全绿后 curl 签名调用 http://服务器IP:18081/api/webhook
+   -> updater 容器校验 HMAC 签名，git ls-remote 确认有新 commit
+   -> 拉起一次性 helper 容器（qq-bot-updater-run）
+        git fetch + merge --ff-only -> docker compose build -> up -d
+   -> updater 记录结果到 data/updater/state.json
+```
+
+要点：
+
+- **触发器**：无公网时**纯轮询即可用**（默认 5 分钟，见「没有公网 IP」）；有公网可补配 webhook 秒级触发。updater 每 `UPDATER_POLL_INTERVAL` 秒 `git ls-remote`，发现新 commit 自动拉取重建。
+- **自愈重建**：实际的 pull/构建在**一次性 helper 容器**里执行，因此 `docker compose up` 重建 `qq-bot-updater` 自身也不会打断进行中的更新；updater 重启后会自动接管未完成的更新。
+- **安全边界**：只接受 `--ff-only` 快进；工作区有未提交改动时直接拒绝（exit 2 并上报）；`data/`、`.env.prod` 被 Git 忽略不受影响；`up -d` 不带 `--force-recreate`，配置没变的 NapCat（QQ 登录态）不会被无谓重启；连续失败会退避 15 分钟。
+- **构建产物**：`qq-bot-updater:local` 镜像（`deploy/Dockerfile`，含 git + docker cli + compose + buildx）。
+
+### 首次启用
+
+1. 确认 `.env.prod` 里已有（`openssl rand -hex 24` 生成）：
+
+   ```dotenv
+   UPDATER_ENABLED=true
+   UPDATER_TOKEN=随机字符串        # 手动触发接口的 Bearer token
+   UPDATER_WEBHOOK_SECRET=随机字符串 # webhook HMAC 密钥
+   UPDATER_BRANCH=master
+   UPDATER_POLL_INTERVAL=300
+   UPDATER_AUTO_UPDATE=true
+   ```
+
+2. GitHub 仓库 → Settings → Secrets and variables → Actions，添加：
+
+   | Secret | 值 |
+   | --- | --- |
+   | `DEPLOY_WEBHOOK_URL` | `http://服务器IP:18081/api/webhook` |
+   | `DEPLOY_WEBHOOK_SECRET` | 与 `UPDATER_WEBHOOK_SECRET` 相同 |
+
+   **服务器没有公网 IP？这两个 Secret 直接不配即可**：deploy job 会打一条 notice 后绿勾跳过（不会报错），更新完全由服务器自己的轮询驱动（见下节）。webhook 只是把延迟从「轮询间隔」压到秒级的加速器，不是必需品。
+
+3. 启动服务并确认状态：
+
+   ```bash
+   docker compose up -d --build updater
+   curl http://localhost:18081/api/status
+   ```
+
+之后每次 push master：Actions 跑测试（始终执行），服务器在**一个轮询周期内**自动拉取重建（默认 5 分钟；测试失败则远端也没有新 commit 可拉）。
+
+### 没有公网 IP（纯轮询模式）
+
+出站可达就够了——updater 每 `UPDATER_POLL_INTERVAL` 秒对 GitHub 执行一次 `git ls-remote`，发现新 commit 就自动拉取重建，整条链路都在你内网完成，无需任何入站端口：
+
+```dotenv
+# .env.prod：按需调小间隔（单位秒，最小 15）
+UPDATER_POLL_INTERVAL=60
+```
+
+```bash
+docker compose up -d updater   # 或等下次自动更新生效
+```
+
+- `ls-remote` 走的是 git 协议不是 GitHub API，每分钟一次没有配额压力；间隔拉太短（<15s）没有意义。
+- 18081 端口此时**不必暴露公网**，直接防火墙拦掉入站也不影响轮询。
+- 以后若想要秒级触发，可以再用 Cloudflare Tunnel / frp 之类把 18081 打出去并补配两个 Secret；架构不用改。
+- 确认轮询在工作：`curl http://localhost:18081/api/status` 看 `poll_interval`，`docker compose logs -f updater` 看轮询日志。
+
+### 手动触发
+
+```bash
+TOKEN=$(grep '^UPDATER_TOKEN=' .env.prod | cut -d= -f2)
+
+# 查看状态（本地/远端 commit、上次更新结果）
+curl http://localhost:18081/api/status
+
+# 检查更新：落后则自动开始更新
+curl -X POST http://localhost:18081/api/check -H "Authorization: Bearer $TOKEN"
+
+# 只拉取代码和报告差异，不构建不重启
+curl -X POST http://localhost:18081/api/update \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data '{"dry_run": true}'
+
+# 即使没有新 commit 也强制重建
+curl -X POST http://localhost:18081/api/update \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  --data '{"force": true}'
+```
+
+### 安全与急停
+
+- 18081 会暴露到公网（GitHub 回调需要）。`UPDATER_WEBHOOK_SECRET` 与 `UPDATER_TOKEN` 必须是高强度随机串；能用防火墙限来源就限到 GitHub 的 webhook IP 段。
+- 两个 secret 都留空时 webhook 直接返回 503 拒绝服务，`/api/check`、`/api/update` 返回 403。
+- 急停：`.env.prod` 设 `UPDATER_ENABLED=false` 后 `docker compose up -d updater`（轮询与触发全部失效，容器仍可查状态）。
+
 ## 更新与故障排查
+
+自动更新不可用时的手动兜底：
 
 ```bash
 git pull
@@ -226,11 +350,14 @@ docker compose up -d --force-recreate
 | 邮件发送失败 | 检查 SMTP 主机、端口、STARTTLS/SSL 与发件地址权限 |
 | 图片发送失败 | 确认 `PUBLIC_BASE_URL` 能从 NapCat 容器访问，并检查上传目录权限 |
 | 数据消失 | 确认没有删除 `data/`，且所有服务都使用当前 Compose 文件 |
+| 自动更新没触发 | `curl :18081/api/status` 看 `last_run`；Actions 里看 deploy job 是否配置了两个 Secret；核对两侧 `UPDATER_WEBHOOK_SECRET` 是否一致 |
+| 更新失败 exit=2 | 工作区有未提交改动，updater 按设计拒绝；`git status` 处理后重试 |
+| webhook 返回 401 | 签名密钥不一致或请求体被中间代理改写 |
 
 健康检查：
 
 ```bash
-curl http://localhost:8080/api/health
+curl http://localhost:18080/api/health
 ```
 
 ## 安全建议

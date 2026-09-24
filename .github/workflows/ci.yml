@@ -1,0 +1,70 @@
+name: CI/CD
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+
+jobs:
+  api-tests:
+    name: API tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt pytest
+      - name: Run tests
+        run: pytest tests/ -q
+
+  web-build:
+    name: WebUI build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  deploy:
+    name: Trigger server update
+    # Only pushes to master trigger an update; PRs and forks just run tests.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    needs: [api-tests, web-build]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call updater webhook (HMAC signed)
+        env:
+          DEPLOY_WEBHOOK_URL: ${{ secrets.DEPLOY_WEBHOOK_URL }}
+          DEPLOY_WEBHOOK_SECRET: ${{ secrets.DEPLOY_WEBHOOK_SECRET }}
+          HEAD_MESSAGE: ${{ github.event.head_commit.message }}
+        run: |
+          if [ -z "$DEPLOY_WEBHOOK_URL" ]; then
+            echo "::notice::DEPLOY_WEBHOOK_URL secret not set, skipping deploy trigger"
+            exit 0
+          fi
+          if [ -z "$DEPLOY_WEBHOOK_SECRET" ]; then
+            echo "::error::DEPLOY_WEBHOOK_SECRET secret not set"
+            exit 1
+          fi
+          BODY=$(jq -nc --arg ref "$GITHUB_REF" --arg sha "$GITHUB_SHA" --arg msg "$HEAD_MESSAGE" \
+            '{ref: $ref, head_commit: {id: $sha, message: $msg}}')
+          SIG="sha256=$(printf '%s' "$BODY" | openssl dgst -sha256 -hmac "$DEPLOY_WEBHOOK_SECRET" -r | awk '{print $1}')"
+          echo "POST $DEPLOY_WEBHOOK_URL"
+          curl -fsS --max-time 30 -X POST "$DEPLOY_WEBHOOK_URL" \
+            -H 'Content-Type: application/json' \
+            -H 'X-GitHub-Event: push' \
+            -H "X-Hub-Signature-256: $SIG" \
+            --data "$BODY"
+          echo

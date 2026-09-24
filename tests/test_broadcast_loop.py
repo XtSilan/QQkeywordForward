@@ -4,6 +4,9 @@ Runs under pytest or directly: ``python tests/test_broadcast_loop.py``.
 
 Uses a temporary database built by the real ``init_db`` (so migration 009 is
 exercised) and ``admin_guard`` passes because ``app_env`` defaults to "dev".
+The create endpoint only accepts groups that exist and are enabled (groups are
+normally written by the OneBot sync), so each fresh database is seeded with the
+three groups the tests broadcast to.
 """
 from __future__ import annotations
 
@@ -25,8 +28,10 @@ from fastapi.testclient import TestClient  # noqa: E402
 
 from app.api import broadcast as broadcast_api  # noqa: E402
 from app.db import connection, init_db  # noqa: E402
-from app.repositories import broadcast_repo  # noqa: E402
+from app.repositories import broadcast_repo, group_repo  # noqa: E402
 from app.settings import get_settings  # noqa: E402
+
+SEEDED_GROUPS = ("1001", "1002", "1003")
 
 
 def make_client() -> TestClient:
@@ -36,6 +41,9 @@ def make_client() -> TestClient:
     )
     get_settings.cache_clear()
     init_db()
+    with connection() as conn:
+        for group_id in SEEDED_GROUPS:
+            group_repo.ensure_group(conn, group_id)
     app = FastAPI()
     app.include_router(broadcast_api.router)
     return TestClient(app)

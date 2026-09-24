@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     upload_dir: str = "/app/data/nonebot/uploads"
     public_base_url: str = "http://localhost:8080"
     max_upload_size_mb: int = 10
+    # Baked into the image at build time (compose build arg, maintained by the
+    # updater helper). Shown in the WebUI sidebar so the running build is
+    # identifiable after every auto-update.
+    app_version: str = "dev"
+    app_build_time: str = ""
 
     model_config = SettingsConfigDict(
         env_file=(".env", ".env.prod"),

@@ -18,6 +18,7 @@ import { BrowserRouter, NavLink, Navigate, Route, Routes, useLocation } from "re
 
 import { fetchAuthMe } from "./api/auth";
 import { getDashboard } from "./api/dashboard";
+import { getHealth, type Health } from "./api/health";
 import { restartService } from "./api/ops";
 import { NotificationBell } from "./components/NotificationBell";
 import { StatusDot } from "./components/StatusDot";
@@ -71,6 +72,7 @@ function AppShell() {
   const { pathname } = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
   const [dashboard, setDashboard] = useState<Dashboard | null>(null);
+  const [health, setHealth] = useState<Health | null>(null);
   const [authenticated, setAuthenticated] = useState<boolean | null>(null);
   const [error, setError] = useState("");
   const [action, setAction] = useState("");
@@ -88,6 +90,8 @@ function AppShell() {
     void fetchAuthMe()
       .then(setAuthenticated)
       .catch(() => setAuthenticated(false));
+    // build metadata is static per image; fetch once per page load
+    void getHealth().then(setHealth).catch(() => setHealth(null));
   }, []);
 
   usePoll(refresh, 5000);
@@ -155,6 +159,12 @@ function AppShell() {
           <div className="connection-row">
             <StatusDot online={Boolean(dashboard)} />
             <span>{dashboard ? "WebUI 正常" : "WebUI 离线"}</span>
+          </div>
+          <div
+            className="sidebar-version"
+            title={health?.build_time ? `构建于 ${health.build_time}` : undefined}
+          >
+            v{health?.version || "dev"}
           </div>
         </div>
       </aside>

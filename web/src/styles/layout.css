@@ -17,6 +17,7 @@
 .nav-pill { border: 1px solid #315b89; color: #8ec5ff; border-radius: 4px; padding: 2px 4px; font-size: 9px; letter-spacing: .06em; }
 .sidebar-footer { margin-top: auto; display: grid; gap: 9px; padding: 15px 11px 2px; border-top: 1px solid #202c3e; font-size: 11px; }
 .connection-row { display: flex; align-items: center; gap: 8px; }
+.sidebar-version { color: #7b8798; font-size: 10px; letter-spacing: .04em; padding-top: 1px; user-select: all; }
 .status-dot { width: 7px; height: 7px; flex: 0 0 7px; display: inline-block; border-radius: 50%; background: #94a3b8; }
 .status-dot.online { background: #22c55e; box-shadow: 0 0 0 3px rgba(34, 197, 94, .14); }
 
