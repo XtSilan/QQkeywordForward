@@ -19,7 +19,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -i http://mirrors.tencentyun.com/pypi/simple/ --trusted-host mirrors.tencentyun.com -r requirements.txt
+# Default to Tsinghua (works off-Tencent-Cloud); compose/build may override
+# with PIP_INDEX_URL (e.g. mirrors.tencentyun.com inside Tencent Cloud).
+ARG PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+RUN pip install --no-cache-dir -i "${PIP_INDEX_URL}" -r requirements.txt
 
 COPY app ./app
 COPY --from=frontend /frontend/dist ./web/dist
