@@ -64,6 +64,8 @@ services:
       args:
         APP_VERSION: "${APP_VERSION:-dev}"
         APP_BUILD_TIME: "${APP_BUILD_TIME:-}"
+        # Optional override in .env.prod (defaults to Tsinghua mirror).
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
     container_name: qq-bot-nonebot
     restart: unless-stopped
     command: python -m app.nonebot_bot
@@ -91,6 +93,7 @@ services:
       args:
         APP_VERSION: "${APP_VERSION:-dev}"
         APP_BUILD_TIME: "${APP_BUILD_TIME:-}"
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
     container_name: qq-bot-webui
     restart: unless-stopped
     command: uvicorn app.main:app --host 0.0.0.0 --port 8080
@@ -124,6 +127,8 @@ services:
   updater:
     build:
       context: ./deploy
+      args:
+        PIP_INDEX_URL: "${PIP_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}"
     image: qq-bot-updater:local
     container_name: qq-bot-updater
     restart: unless-stopped

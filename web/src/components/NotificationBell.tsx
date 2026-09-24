@@ -75,10 +75,13 @@ export function NotificationBell() {
     };
   }, [open]);
 
+  // Refetch every time the panel opens so new pushes show up without a
+  // full page reload (the backend also keeps a short server-side cache).
   useEffect(() => {
-    if (!open || updates !== null || error) return;
+    if (!open) return;
     let cancelled = false;
     setLoading(true);
+    setError(false);
     void (async () => {
       try {
         const payload = await listReleaseNotes();
@@ -94,7 +97,7 @@ export function NotificationBell() {
     return () => {
       cancelled = true;
     };
-  }, [open, updates, error]);
+  }, [open]);
 
   const empty = !updates || updates.length === 0;
 

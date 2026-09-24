@@ -102,6 +102,20 @@ def test_compute_build_state_dev_versions_are_always_stale():
     assert versioning.compute_build_state(None, "", "abcdef12") == ("dev", True)
 
 
+def test_compute_build_state_short_sha_prefix_match_not_stale():
+    # git short SHA is often 7 chars; APP_VERSION may be 7 while local is full.
+    local = "de068728ec35ad7ae1c063cf4f830f625deda8b2"
+    assert versioning.compute_build_state(None, "de06872", local) == ("de06872", False)
+    assert versioning.compute_build_state(None, "de068728", local) == ("de068728", False)
+    # different commit must stay stale
+    version, stale = versioning.compute_build_state(None, "ffffffff", local)
+    assert version == "ffffffff" and stale is True
+    # last successful run uses full sha_after
+    assert versioning.compute_build_state(
+        {"ok": True, "sha_after": local}, "", local
+    ) == (local[:8], False)
+
+
 def test_write_build_info_updates_env_and_restores():
     import tempfile
 

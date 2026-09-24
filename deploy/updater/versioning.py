@@ -24,6 +24,19 @@ def read_env_version() -> str:
         return ""
 
 
+def _same_commit(a: str, b: str) -> bool:
+    """True when two SHAs refer to the same commit.
+
+    Either side may be a short SHA (git short is often 7 chars, APP_VERSION
+    may be 7 or 8). Comparing fixed ``[:8]`` slices mis-fires when lengths
+    differ (``de06872`` vs ``de068728``); compare the shared prefix instead.
+    """
+    if not a or not b:
+        return False
+    n = min(len(a), len(b))
+    return a[:n] == b[:n]
+
+
 def compute_build_state(
     last_run: dict[str, Any] | None,
     env_version: str,
@@ -42,9 +55,9 @@ def compute_build_state(
         return env_version or "dev", False
     if last_run and last_run.get("ok") and last_run.get("sha_after"):
         built = str(last_run["sha_after"])
-        return built[:8], built[:8] != local_sha[:8]
+        return built[:8], not _same_commit(built, local_sha)
     if env_version:
         if env_version in {"dev", "dev-local"}:
             return env_version, True
-        return env_version, env_version[:8] != local_sha[:8]
+        return env_version, not _same_commit(env_version, local_sha)
     return "dev", True

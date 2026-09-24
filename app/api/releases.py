@@ -24,7 +24,7 @@ from app.api.deps import admin_guard
 REPO = "XtSilan/QQkeywordForward"
 PAGE_SIZE = 15
 TIMEOUT_SECONDS = 8
-CACHE_TTL_SECONDS = 600
+CACHE_TTL_SECONDS = 60  # short: new pushes should appear in the bell quickly
 API_URL = f"https://api.github.com/repos/{REPO}/commits"
 RUNS_URL = f"https://api.github.com/repos/{REPO}/actions/runs"
 

@@ -73,6 +73,9 @@ SMTP_TIMEOUT=15
 PUBLIC_BASE_URL=http://你的服务器IP:18080
 MAX_UPLOAD_SIZE_MB=10
 
+# 可选：镜像构建 pip 源（默认清华；腾讯云内网可改 mirrors.tencentyun.com）
+PIP_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
+
 # --- 宿主机端口映射（compose 插值，改这里避开本地端口冲突） ---
 # 只改宿主机侧，容器内端口固定，服务间互访不受影响。
 # 这两个文件被 Git 忽略，改端口不会和自动更新的 git pull 冲突。
